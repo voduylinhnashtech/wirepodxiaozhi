@@ -154,43 +154,38 @@ func StartReader(deviceID string, conn *websocket.Conn, sessionID string) {
 			messageType, message, err := conn.ReadMessage()
 			if err != nil {
 				// Error occurred - stop reader like go-xiaozhi-main
-				// Check if this is a graceful close (websocket: close 1005) during active LLM session
-				connInfo.mu.RLock()
-				llmHandler := connInfo.LLMHandler
-				sttHandler := connInfo.STTHandler
-				connInfo.mu.RUnlock()
-
-				// IMPORTANT: Deactivate handlers and release connection when connection is closed
-				// This allows STT to create new connection and reuse session
-				if llmHandler != nil {
-					llmHandler.SetActive(false)
-					logger.Println(fmt.Sprintf("[ConnectionManager] LLM handler deactivated due to connection close for device %s", deviceID))
-				}
-				if sttHandler != nil {
-					sttHandler.SetActive(false)
-					logger.Println(fmt.Sprintf("[ConnectionManager] STT handler deactivated due to connection close for device %s", deviceID))
-				}
+				// IMPORTANT: Don't deactivate handlers immediately - keep them for potential reactivation
+				// Only mark connection as invalid, but keep handlers in case connection is recreated
+				// This allows handlers to be reactivated when new connection is created
+				logger.Println(fmt.Sprintf("[ConnectionManager] Connection closed for device %s: %v", deviceID, err))
 
 				// IMPORTANT: Mark connection as invalid IMMEDIATELY by setting Conn to nil
 				// This prevents STT handler from trying to reuse a closed connection
 				// (giống botkct.py - không cần "in use" flag, chỉ cần mark invalid)
+				// BUT: Keep handlers so they can be reactivated when new connection is created
 				connInfo.mu.Lock()
 				connInfo.ReaderRunning = false
 				connInfo.Conn = nil // Mark as invalid immediately
+				// DON'T deactivate handlers - they will be reactivated when new connection is created
 				connInfo.mu.Unlock()
 
-				logger.Println(fmt.Sprintf("[ConnectionManager] Read error for device %s: %v, connection marked as invalid immediately", deviceID, err))
+				logger.Println(fmt.Sprintf("[ConnectionManager] Read error for device %s: %v, connection marked as invalid immediately (handlers kept for reactivation)", deviceID, err))
 
 				// Remove connection from manager immediately (no wait)
-				// STT handler will create new connection when needed
-				go func() {
+				// STT handler will create new connection when needed and reactivate handlers
+				go func(devID string) {
 					// Small delay to ensure all cleanup is done
 					time.Sleep(100 * time.Millisecond)
 					connManager.mu.Lock()
-					delete(connManager.connections, deviceID)
+					// Check if connection still exists before deleting
+					if _, exists := connManager.connections[devID]; exists {
+						// Keep handlers in case they need to be reactivated
+						// Only remove connection, handlers will be reused or replaced when new connection is created
+						delete(connManager.connections, devID)
+					}
 					connManager.mu.Unlock()
-					logger.Println(fmt.Sprintf("[ConnectionManager] Connection removed from manager for device %s (STT will create new connection when needed)", deviceID))
-				}()
+					logger.Println(fmt.Sprintf("[ConnectionManager] Connection removed from manager for device %s (STT will create new connection when needed)", devID))
+				}(deviceID)
 				return
 			}
 
@@ -219,10 +214,45 @@ func StartReader(deviceID string, conn *websocket.Conn, sessionID string) {
 			}
 
 			// No active handler - log and continue (message will be ignored)
+			// IMPORTANT: For TTS/LLM messages, try to activate handler if it exists but is inactive
+			// This handles the case where connection was recreated but handler wasn't activated
 			if messageType == websocket.TextMessage {
 				var event map[string]interface{}
 				if err := json.Unmarshal(message, &event); err == nil {
 					eventType, _ := event["type"].(string)
+					// If TTS/LLM message and no active handler, try to activate appropriate handler
+					if eventType == "tts" || eventType == "llm" {
+						connInfo.mu.RLock()
+						sttHandler := connInfo.STTHandler
+						llmHandler := connInfo.LLMHandler
+						connInfo.mu.RUnlock()
+
+						// Try LLM handler first (for llm/tts messages)
+						if llmHandler != nil && !llmHandler.IsActive() && (eventType == "llm" || eventType == "tts") {
+							logger.Println(fmt.Sprintf("[ConnectionManager] ⚠️  %s message received but LLM handler inactive for device %s, attempting to activate...", eventType, deviceID))
+							llmHandler.SetActive(true)
+							// Try to handle the message now
+							if err := llmHandler.HandleMessage(messageType, message); err != nil {
+								logger.Println(fmt.Sprintf("[ConnectionManager] LLM handler error after activation for device %s: %v", deviceID, err))
+							} else {
+								logger.Println(fmt.Sprintf("[ConnectionManager] ✅ LLM handler activated and processed %s message for device %s", eventType, deviceID))
+							}
+							continue
+						}
+
+						// Fallback to STT handler for TTS messages
+						if sttHandler != nil && !sttHandler.IsActive() && eventType == "tts" {
+							logger.Println(fmt.Sprintf("[ConnectionManager] ⚠️  TTS message received but STT handler inactive for device %s, attempting to activate...", deviceID))
+							sttHandler.SetActive(true)
+							// Try to handle the message now
+							if err := sttHandler.HandleMessage(messageType, message); err != nil {
+								logger.Println(fmt.Sprintf("[ConnectionManager] STT handler error after activation for device %s: %v", deviceID, err))
+							} else {
+								logger.Println(fmt.Sprintf("[ConnectionManager] ✅ STT handler activated and processed TTS message for device %s", deviceID))
+							}
+							continue
+						}
+					}
 					logger.Println(fmt.Sprintf("[ConnectionManager] No active handler for device %s, ignoring message type: %s", deviceID, eventType))
 				}
 			}
