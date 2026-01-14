@@ -311,6 +311,19 @@ func IsSTTHandlerActive(deviceID string) bool {
 	return false
 }
 
+// GetLLMHandler returns the LLM handler for a device (for status checking)
+func GetLLMHandler(deviceID string) MessageHandler {
+	connManager.mu.RLock()
+	defer connManager.mu.RUnlock()
+
+	if connInfo, exists := connManager.connections[deviceID]; exists {
+		connInfo.mu.RLock()
+		defer connInfo.mu.RUnlock()
+		return connInfo.LLMHandler
+	}
+	return nil
+}
+
 // IsRobotListening checks if robot is currently listening (sending audio chunks)
 // Returns true if STT handler is active AND robot has sent audio chunks recently (within last 2 seconds)
 // This is more reliable than just checking STT handler active status
