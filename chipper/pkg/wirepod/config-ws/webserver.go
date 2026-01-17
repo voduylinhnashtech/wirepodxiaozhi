@@ -1,6 +1,8 @@
 package webserver
 
 import (
+	"archive/zip"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,6 +12,7 @@ import (
 	"path"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
@@ -20,6 +23,7 @@ import (
 	processreqs "github.com/kercre123/wire-pod/chipper/pkg/wirepod/preqs"
 	botsetup "github.com/kercre123/wire-pod/chipper/pkg/wirepod/setup"
 	"github.com/kercre123/wire-pod/chipper/pkg/xiaozhi"
+	"gopkg.in/ini.v1"
 )
 
 var SttInitFunc func() error
@@ -69,6 +73,10 @@ func apiHandler(w http.ResponseWriter, r *http.Request) {
 		handleGenerateCerts(w)
 	case "is_api_v3":
 		fmt.Fprintf(w, "it is!")
+	case "bot_auth_export":
+		handleBotAuthExport(w, r)
+	case "bot_auth_import":
+		handleBotAuthImport(w, r)
 	case "xiaozhi_generate_pairing_code":
 		handleXiaozhiGeneratePairingCode(w, r)
 	case "xiaozhi_validate_pairing_code":
@@ -96,6 +104,470 @@ func apiHandler(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "not found", http.StatusNotFound)
 	}
+}
+
+// ---- Bot auth bundle export/import (for migrating a robot between machines) ----
+
+type botSdkInfoJSON struct {
+	GlobalGUID string `json:"global_guid"`
+	Robots     []struct {
+		Esn       string `json:"esn"`
+		IPAddress string `json:"ip_address"`
+		GUID      string `json:"guid"`
+		Activated bool   `json:"activated"`
+	} `json:"robots"`
+}
+
+type jdocEntryJSON struct {
+	Thing string     `json:"thing"`
+	Name  string     `json:"name"`
+	Jdoc  vars.AJdoc `json:"jdoc"`
+}
+
+func normalizeESN(esn string) string {
+	return strings.TrimSpace(strings.ToLower(esn))
+}
+
+func zipAddBytes(zw *zip.Writer, name string, b []byte) error {
+	h := &zip.FileHeader{
+		Name:     name,
+		Method:   zip.Deflate,
+		Modified: time.Now(),
+	}
+	w, err := zw.CreateHeader(h)
+	if err != nil {
+		return err
+	}
+	_, err = w.Write(b)
+	return err
+}
+
+func zipAddFile(zw *zip.Writer, name string, srcPath string) error {
+	b, err := os.ReadFile(srcPath)
+	if err != nil {
+		return err
+	}
+	return zipAddBytes(zw, name, b)
+}
+
+func handleBotAuthExport(w http.ResponseWriter, r *http.Request) {
+	esn := normalizeESN(r.URL.Query().Get("esn"))
+	if esn == "" {
+		http.Error(w, "missing esn", http.StatusBadRequest)
+		return
+	}
+
+	type exportManifest struct {
+		ESN      string            `json:"esn"`
+		Included []string          `json:"included"`
+		Missing  map[string]string `json:"missing"`
+		Notes    []string          `json:"notes"`
+	}
+	manifest := exportManifest{
+		ESN:     esn,
+		Missing: map[string]string{},
+		Notes: []string{
+			"Some files are optional and will be missing if they do not exist on this machine.",
+			"To make GUID/token work on another machine, you typically need botSdkInfo + session-certs + .anki_vector certs (and sometimes jdocs). This export includes all matching session-certs/<*> for the ESN when available.",
+		},
+	}
+	addIncluded := func(name string) {
+		manifest.Included = append(manifest.Included, name)
+	}
+	addMissing := func(name string, why string) {
+		manifest.Missing[name] = why
+	}
+
+	// Load botSdkInfo.json from disk
+	var info botSdkInfoJSON
+	botBytes, err := os.ReadFile(vars.BotInfoPath)
+	if err != nil {
+		http.Error(w, "failed to read botSdkInfo.json: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if err := json.Unmarshal(botBytes, &info); err != nil {
+		http.Error(w, "failed to parse botSdkInfo.json: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Filter to requested ESN (keep global_guid)
+	var filtered botSdkInfoJSON
+	filtered.GlobalGUID = info.GlobalGUID
+	for _, rob := range info.Robots {
+		if normalizeESN(rob.Esn) == esn {
+			filtered.Robots = append(filtered.Robots, rob)
+		}
+	}
+	if len(filtered.Robots) == 0 {
+		http.Error(w, "esn not found in botSdkInfo.json", http.StatusNotFound)
+		return
+	}
+
+	filename := fmt.Sprintf("wirepod-bot-auth-%s.zip", esn)
+	w.Header().Set("Content-Type", "application/zip")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filename))
+
+	zw := zip.NewWriter(w)
+	defer zw.Close()
+
+	// README
+	if err := zipAddBytes(zw, "README.txt", []byte("Wire-Pod bot auth bundle\n\nContents:\n- botSdkInfo.json (filtered)\n- jdocs.json (filtered for vic:<esn>)\n- session-certs/<files matching ESN>\n- .anki_vector/sdk_config.ini and cert(s) for this ESN\n\nImport this zip on the other machine via Bot Setup → Import.\n")); err == nil {
+		addIncluded("README.txt")
+	}
+
+	// botSdkInfo.json (filtered)
+	filteredBytes, _ := json.Marshal(filtered)
+	if err := zipAddBytes(zw, "botSdkInfo.json", filteredBytes); err == nil {
+		addIncluded("botSdkInfo.json")
+	}
+
+	// session-certs (optional): include any file in SessionCertPath that matches this ESN
+	if vars.SessionCertPath != "" {
+		entries, err := os.ReadDir(vars.SessionCertPath)
+		if err == nil {
+			foundAny := false
+			for _, e := range entries {
+				if e.IsDir() {
+					continue
+				}
+				n := e.Name()
+				// Most common: filename == ESN, but some setups may include additional suffixes.
+				if normalizeESN(n) != esn && !strings.Contains(strings.ToLower(n), esn) {
+					continue
+				}
+				foundAny = true
+				src := filepath.Join(vars.SessionCertPath, n)
+				dst := filepath.ToSlash(filepath.Join("session-certs", n))
+				if err := zipAddFile(zw, dst, src); err == nil {
+					addIncluded(dst)
+				} else {
+					addMissing(dst, "read failed: "+err.Error())
+				}
+			}
+			if !foundAny {
+				addMissing(filepath.ToSlash(filepath.Join("session-certs", esn)), "no matching files found in "+vars.SessionCertPath)
+			}
+		} else {
+			addMissing("session-certs/", "cannot read dir "+vars.SessionCertPath+": "+err.Error())
+		}
+	} else {
+		addMissing("session-certs/", "vars.SessionCertPath is empty")
+	}
+
+	// .anki_vector files (optional)
+	if vars.SDKIniPath != "" {
+		// sdk_config.ini
+		iniPath := filepath.Join(vars.SDKIniPath, "sdk_config.ini")
+		if _, err := os.Stat(iniPath); err == nil {
+			name := filepath.ToSlash(filepath.Join(".anki_vector", "sdk_config.ini"))
+			if err := zipAddFile(zw, name, iniPath); err == nil {
+				addIncluded(name)
+			} else {
+				addMissing(name, "read failed: "+err.Error())
+			}
+		} else {
+			addMissing(filepath.ToSlash(filepath.Join(".anki_vector", "sdk_config.ini")), "not found at "+iniPath)
+		}
+		// cert(s) matching this ESN
+		entries, err := os.ReadDir(vars.SDKIniPath)
+		if err == nil {
+			var names []string
+			for _, e := range entries {
+				if e.IsDir() {
+					continue
+				}
+				names = append(names, e.Name())
+			}
+			sort.Strings(names)
+			for _, name := range names {
+				if !strings.HasSuffix(name, ".cert") {
+					continue
+				}
+				if !strings.Contains(strings.ToLower(name), esn) {
+					continue
+				}
+				dst := filepath.ToSlash(filepath.Join(".anki_vector", name))
+				if err := zipAddFile(zw, dst, filepath.Join(vars.SDKIniPath, name)); err == nil {
+					addIncluded(dst)
+				} else {
+					addMissing(dst, "read failed: "+err.Error())
+				}
+			}
+			// If no cert matched, note it
+			foundCert := false
+			for _, inc := range manifest.Included {
+				if strings.HasPrefix(inc, ".anki_vector/") && strings.HasSuffix(inc, ".cert") {
+					foundCert = true
+					break
+				}
+			}
+			if !foundCert {
+				addMissing(".anki_vector/<botname>-"+esn+".cert", "no matching *.cert found in "+vars.SDKIniPath)
+			}
+		} else {
+			addMissing(".anki_vector/", "cannot read dir "+vars.SDKIniPath+": "+err.Error())
+		}
+	} else {
+		addMissing(".anki_vector/", "vars.SDKIniPath is empty (not initialized or unsupported on this OS)")
+	}
+
+	// jdocs.json filtered (optional)
+	if jdocsBytes, err := os.ReadFile(vars.JdocsPath); err == nil {
+		var entries []jdocEntryJSON
+		if err := json.Unmarshal(jdocsBytes, &entries); err == nil {
+			var out []jdocEntryJSON
+			wantThing := "vic:" + esn
+			for _, e := range entries {
+				if e.Thing == wantThing {
+					out = append(out, e)
+				}
+			}
+			if len(out) > 0 {
+				outBytes, _ := json.Marshal(out)
+				if err := zipAddBytes(zw, "jdocs.json", outBytes); err == nil {
+					addIncluded("jdocs.json")
+				}
+			} else {
+				addMissing("jdocs.json", "no entries for vic:"+esn+" in "+vars.JdocsPath)
+			}
+		} else {
+			addMissing("jdocs.json", "failed to parse "+vars.JdocsPath+": "+err.Error())
+		}
+	} else {
+		addMissing("jdocs.json", "not found at "+vars.JdocsPath)
+	}
+
+	// manifest
+	manifestBytes, _ := json.MarshalIndent(manifest, "", "  ")
+	_ = zipAddBytes(zw, "MANIFEST.json", manifestBytes)
+}
+
+func safeZipReadAll(f *zip.File, limit int64) ([]byte, error) {
+	rc, err := f.Open()
+	if err != nil {
+		return nil, err
+	}
+	defer rc.Close()
+	var buf bytes.Buffer
+	if _, err := io.CopyN(&buf, rc, limit+1); err != nil && err != io.EOF {
+		return nil, err
+	}
+	if int64(buf.Len()) > limit {
+		return nil, fmt.Errorf("file too large: %s", f.Name)
+	}
+	return buf.Bytes(), nil
+}
+
+func handleBotAuthImport(w http.ResponseWriter, r *http.Request) {
+	// limit upload to 25MB
+	r.Body = http.MaxBytesReader(w, r.Body, 25<<20)
+	if err := r.ParseMultipartForm(25 << 20); err != nil {
+		http.Error(w, "invalid multipart upload: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	file, _, err := r.FormFile("file")
+	if err != nil {
+		http.Error(w, "missing file", http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+
+	zipBytes, err := io.ReadAll(file)
+	if err != nil {
+		http.Error(w, "failed to read upload: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	zr, err := zip.NewReader(bytes.NewReader(zipBytes), int64(len(zipBytes)))
+	if err != nil {
+		http.Error(w, "invalid zip: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// Load current botSdkInfo.json
+	var current botSdkInfoJSON
+	if b, err := os.ReadFile(vars.BotInfoPath); err == nil {
+		_ = json.Unmarshal(b, &current)
+	}
+
+	// Load current jdocs.json (optional)
+	var currentJdocs []jdocEntryJSON
+	if b, err := os.ReadFile(vars.JdocsPath); err == nil {
+		_ = json.Unmarshal(b, &currentJdocs)
+	}
+	jdocMap := make(map[string]jdocEntryJSON)
+	for _, e := range currentJdocs {
+		jdocMap[e.Thing+"|"+e.Name] = e
+	}
+
+	importedBots := 0
+	importedCerts := 0
+	importedJdocs := 0
+	importedSDKIniWrites := 0
+
+	// If the zip contains a sdk_config.ini, we will MERGE only the imported ESN sections into local sdk_config.ini.
+	var importedSDKIniBytes []byte
+	importedESNs := map[string]bool{}
+
+	for _, f := range zr.File {
+		name := filepath.ToSlash(f.Name)
+		switch {
+		case name == "botSdkInfo.json":
+			b, err := safeZipReadAll(f, 2<<20)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			var imp botSdkInfoJSON
+			if err := json.Unmarshal(b, &imp); err != nil {
+				http.Error(w, "invalid botSdkInfo.json in zip: "+err.Error(), http.StatusBadRequest)
+				return
+			}
+			// merge global guid (only if current empty)
+			if current.GlobalGUID == "" && imp.GlobalGUID != "" {
+				current.GlobalGUID = imp.GlobalGUID
+			}
+			// upsert robots
+			for _, rob := range imp.Robots {
+				esn := normalizeESN(rob.Esn)
+				if esn == "" {
+					continue
+				}
+				importedESNs[esn] = true
+				found := false
+				for i := range current.Robots {
+					if normalizeESN(current.Robots[i].Esn) == esn {
+						current.Robots[i] = rob
+						found = true
+						break
+					}
+				}
+				if !found {
+					current.Robots = append(current.Robots, rob)
+				}
+				importedBots++
+			}
+		case strings.HasPrefix(name, "session-certs/"):
+			base := strings.TrimPrefix(name, "session-certs/")
+			base = normalizeESN(base)
+			if base == "" || strings.Contains(base, "/") {
+				continue
+			}
+			b, err := safeZipReadAll(f, 5<<20)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			_ = os.MkdirAll(vars.SessionCertPath, 0777)
+			if err := os.WriteFile(filepath.Join(vars.SessionCertPath, base), b, 0644); err == nil {
+				importedCerts++
+			}
+		case strings.HasPrefix(name, ".anki_vector/"):
+			base := filepath.Base(name)
+			if base == "" || base == "." || base == ".." {
+				continue
+			}
+			// only allow sdk_config.ini and *.cert
+			if base != "sdk_config.ini" && !strings.HasSuffix(strings.ToLower(base), ".cert") {
+				continue
+			}
+			b, err := safeZipReadAll(f, 5<<20)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			if base == "sdk_config.ini" {
+				// Defer merge until after we know imported ESNs (from botSdkInfo.json)
+				importedSDKIniBytes = b
+				continue
+			}
+			// cert files: write directly
+			if vars.SDKIniPath != "" {
+				_ = os.MkdirAll(vars.SDKIniPath, 0777)
+				if err := os.WriteFile(filepath.Join(vars.SDKIniPath, base), b, 0644); err == nil {
+					importedCerts++
+				}
+			}
+		case name == "jdocs.json":
+			b, err := safeZipReadAll(f, 10<<20)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			var imp []jdocEntryJSON
+			if err := json.Unmarshal(b, &imp); err != nil {
+				// ignore invalid
+				continue
+			}
+			for _, e := range imp {
+				if e.Thing == "" || e.Name == "" {
+					continue
+				}
+				jdocMap[e.Thing+"|"+e.Name] = e
+				importedJdocs++
+			}
+		default:
+			// ignore
+		}
+	}
+
+	// Merge sdk_config.ini sections if present
+	if len(importedSDKIniBytes) > 0 && vars.SDKIniPath != "" {
+		_ = os.MkdirAll(vars.SDKIniPath, 0777)
+		localPath := filepath.Join(vars.SDKIniPath, "sdk_config.ini")
+		localIni, _ := ini.LooseLoad(localPath)
+		if localIni == nil {
+			localIni = ini.Empty()
+		}
+		importIni, err := ini.LoadSources(ini.LoadOptions{Loose: true, IgnoreInlineComment: true}, importedSDKIniBytes)
+		if err == nil && importIni != nil {
+			for esn := range importedESNs {
+				sec, err := importIni.GetSection(esn)
+				if err != nil || sec == nil {
+					continue
+				}
+				// Ensure section exists in local and copy all keys
+				localSec, _ := localIni.GetSection(esn)
+				if localSec == nil {
+					localSec, _ = localIni.NewSection(esn)
+				}
+				for _, k := range sec.Keys() {
+					localSec.Key(k.Name()).SetValue(k.Value())
+				}
+				importedSDKIniWrites++
+			}
+			_ = localIni.SaveTo(localPath)
+		}
+	}
+
+	// write merged botSdkInfo.json
+	mergedBytes, _ := json.Marshal(current)
+	if err := os.WriteFile(vars.BotInfoPath, mergedBytes, 0644); err != nil {
+		http.Error(w, "failed to write botSdkInfo.json: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	// update in-memory too
+	vars.BotInfo.GlobalGUID = current.GlobalGUID
+	vars.BotInfo.Robots = current.Robots
+
+	// write merged jdocs.json
+	if len(jdocMap) > 0 {
+		var out []jdocEntryJSON
+		for _, v := range jdocMap {
+			out = append(out, v)
+		}
+		// stable-ish order
+		sort.Slice(out, func(i, j int) bool {
+			if out[i].Thing == out[j].Thing {
+				return out[i].Name < out[j].Name
+			}
+			return out[i].Thing < out[j].Thing
+		})
+		outBytes, _ := json.Marshal(out)
+		_ = os.MkdirAll(filepath.Dir(vars.JdocsPath), 0777)
+		_ = os.WriteFile(vars.JdocsPath, outBytes, 0644)
+	}
+
+	fmt.Fprintf(w, "import ok (bots: %d, files: %d, sdk_config sections merged: %d, jdocs: %d). You may need to restart wire-pod.", importedBots, importedCerts, importedSDKIniWrites, importedJdocs)
 }
 
 func handleAddCustomIntent(w http.ResponseWriter, r *http.Request) {

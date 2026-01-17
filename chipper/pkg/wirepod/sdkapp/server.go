@@ -16,19 +16,35 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fforchino/vector-go-sdk/pkg/vector"
 	"github.com/fforchino/vector-go-sdk/pkg/vectorpb"
 	"github.com/kercre123/wire-pod/chipper/pkg/logger"
 	"github.com/kercre123/wire-pod/chipper/pkg/scripting"
+	tokenserver "github.com/kercre123/wire-pod/chipper/pkg/servers/token"
 	"github.com/kercre123/wire-pod/chipper/pkg/vars"
 )
 
 var serverFiles string = "./webroot/sdkapp"
 
 func SdkapiHandler(w http.ResponseWriter, r *http.Request) {
-	robotObj, robotIndex, err := getRobot(r.FormValue("serial"))
-	robot := robotObj.Vector
-	ctx := robotObj.Ctx
-	if r.URL.Path != "/api-sdk/get_sdk_info" && r.URL.Path != "/api-sdk/debug" {
+	// Some endpoints should not require an active robot connection.
+	noRobotRequired := r.URL.Path == "/api-sdk/get_sdk_info" ||
+		r.URL.Path == "/api-sdk/get_bot_info" ||
+		r.URL.Path == "/api-sdk/set_bot_info" ||
+		r.URL.Path == "/api-sdk/get_bot_apptokens" ||
+		r.URL.Path == "/api-sdk/set_bot_apptokens" ||
+		r.URL.Path == "/api-sdk/debug"
+
+	var robotObj Robot
+	var robotIndex int
+	var err error
+	var robot = (*vector.Vector)(nil)
+	var ctx context.Context
+
+	if !noRobotRequired {
+		robotObj, robotIndex, err = getRobot(r.FormValue("serial"))
+		robot = robotObj.Vector
+		ctx = robotObj.Ctx
 		if err != nil {
 			fmt.Fprint(w, "error: "+err.Error())
 			return
@@ -106,6 +122,195 @@ func SdkapiHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		fmt.Fprint(w, string(jsonBytes))
+		return
+	case r.URL.Path == "/api-sdk/get_bot_info":
+		// Always return botSdkInfo, even if empty (useful for manual setup UI)
+		jsonBytes, err := json.Marshal(vars.BotInfo)
+		if err != nil {
+			http.Error(w, "error marshaling json", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, string(jsonBytes))
+		return
+	case r.URL.Path == "/api-sdk/set_bot_info":
+		// Manual update of botSdkInfo.json
+		if err := r.ParseForm(); err != nil {
+			http.Error(w, "invalid form", http.StatusBadRequest)
+			return
+		}
+		esn := strings.TrimSpace(strings.ToLower(r.FormValue("esn")))
+		ip := strings.TrimSpace(r.FormValue("ip_address"))
+		guid := strings.TrimSpace(r.FormValue("guid"))
+		globalGuid := strings.TrimSpace(r.FormValue("global_guid"))
+		autoGenerateGUID := strings.TrimSpace(r.FormValue("auto_generate_guid")) == "1"
+		deleteRequested := strings.TrimSpace(r.FormValue("delete")) == "1"
+
+		// Delete mode: only ESN required
+		if deleteRequested {
+			if esn == "" {
+				http.Error(w, "esn is required for delete", http.StatusBadRequest)
+				return
+			}
+			removed := false
+			newList := make([]struct {
+				Esn       string `json:"esn"`
+				IPAddress string `json:"ip_address"`
+				GUID      string `json:"guid"`
+				Activated bool   `json:"activated"`
+			}, 0, len(vars.BotInfo.Robots))
+			for _, r := range vars.BotInfo.Robots {
+				if strings.EqualFold(strings.TrimSpace(r.Esn), esn) {
+					removed = true
+					continue
+				}
+				newList = append(newList, r)
+			}
+			if !removed {
+				http.Error(w, "esn not found", http.StatusNotFound)
+				return
+			}
+			vars.BotInfo.Robots = newList
+			jsonBytes, jerr := json.Marshal(vars.BotInfo)
+			if jerr != nil {
+				http.Error(w, "error marshaling json", http.StatusInternalServerError)
+				return
+			}
+			if werr := os.WriteFile(vars.BotInfoPath, jsonBytes, 0644); werr != nil {
+				http.Error(w, "error writing botSdkInfo.json: "+werr.Error(), http.StatusInternalServerError)
+				return
+			}
+			fmt.Fprint(w, "deleted "+esn+" from botSdkInfo.json")
+			return
+		}
+
+		if esn == "" || ip == "" {
+			http.Error(w, "esn and ip_address are required", http.StatusBadRequest)
+			return
+		}
+		// Strip :443 if user pasted it
+		if strings.Contains(ip, ":") {
+			parts := strings.Split(ip, ":")
+			if len(parts) >= 2 {
+				last := parts[len(parts)-1]
+				allDigits := true
+				for _, c := range last {
+					if c < '0' || c > '9' {
+						allDigits = false
+						break
+					}
+				}
+				if allDigits {
+					ip = strings.Join(parts[:len(parts)-1], ":")
+				}
+			}
+		}
+
+		if globalGuid != "" {
+			vars.BotInfo.GlobalGUID = globalGuid
+		}
+
+		// If GUID is missing and requested, generate a new GUID + token hash and store it.
+		// NOTE: This mirrors the server-side generation used in token/jdocs flows.
+		// It will create/update the vic.AppTokens jdoc (hash) and update botSdkInfo.json (guid).
+		if guid == "" && autoGenerateGUID {
+			newGUID, tokenHash, terr := tokenserver.CreateTokenAndHashedToken()
+			if terr != nil {
+				http.Error(w, "failed to auto-generate guid: "+terr.Error(), http.StatusInternalServerError)
+				return
+			}
+			// Store hash in vic.AppTokens jdoc for this ESN
+			_ = tokenserver.WriteTokenHash(esn, tokenHash)
+			guid = newGUID
+			logger.Println("Manual bot info: auto-generated GUID for " + esn)
+		}
+
+		updated := false
+		for i := range vars.BotInfo.Robots {
+			if strings.EqualFold(vars.BotInfo.Robots[i].Esn, esn) {
+				vars.BotInfo.Robots[i].Esn = esn
+				vars.BotInfo.Robots[i].IPAddress = ip
+				vars.BotInfo.Robots[i].GUID = guid
+				vars.BotInfo.Robots[i].Activated = guid != ""
+				updated = true
+				break
+			}
+		}
+		if !updated {
+			vars.BotInfo.Robots = append(vars.BotInfo.Robots, struct {
+				Esn       string `json:"esn"`
+				IPAddress string `json:"ip_address"`
+				GUID      string `json:"guid"`
+				Activated bool   `json:"activated"`
+			}{Esn: esn, IPAddress: ip, GUID: guid, Activated: guid != ""})
+		}
+
+		jsonBytes, jerr := json.Marshal(vars.BotInfo)
+		if jerr != nil {
+			http.Error(w, "error marshaling json", http.StatusInternalServerError)
+			return
+		}
+		if werr := os.WriteFile(vars.BotInfoPath, jsonBytes, 0644); werr != nil {
+			http.Error(w, "error writing botSdkInfo.json: "+werr.Error(), http.StatusInternalServerError)
+			return
+		}
+		if guid != "" {
+			fmt.Fprint(w, "saved botSdkInfo.json (guid: "+guid+")")
+		} else {
+			fmt.Fprint(w, "saved botSdkInfo.json")
+		}
+		return
+	case r.URL.Path == "/api-sdk/get_bot_apptokens":
+		esn := strings.TrimSpace(strings.ToLower(r.FormValue("esn")))
+		if esn == "" {
+			esn = strings.TrimSpace(strings.ToLower(r.URL.Query().Get("esn")))
+		}
+		if esn == "" {
+			http.Error(w, "esn is required", http.StatusBadRequest)
+			return
+		}
+		thing := "vic:" + esn
+		jdoc, ok := vars.GetJdoc(thing, "vic.AppTokens")
+		if !ok || strings.TrimSpace(jdoc.JsonDoc) == "" {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		// Extract first token hash if possible (best-effort)
+		type tokenEntry struct {
+			Hash string `json:"hash"`
+		}
+		type tokenMgr struct {
+			ClientTokens []tokenEntry `json:"client_tokens"`
+		}
+		var tm tokenMgr
+		_ = json.Unmarshal([]byte(jdoc.JsonDoc), &tm)
+		hash := ""
+		if len(tm.ClientTokens) > 0 {
+			hash = tm.ClientTokens[len(tm.ClientTokens)-1].Hash
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"esn":  esn,
+			"hash": hash,
+		})
+		return
+	case r.URL.Path == "/api-sdk/set_bot_apptokens":
+		if err := r.ParseForm(); err != nil {
+			http.Error(w, "invalid form", http.StatusBadRequest)
+			return
+		}
+		esn := strings.TrimSpace(strings.ToLower(r.FormValue("esn")))
+		hash := strings.TrimSpace(r.FormValue("hash"))
+		if esn == "" || hash == "" {
+			http.Error(w, "esn and hash are required", http.StatusBadRequest)
+			return
+		}
+		// This writes vic.AppTokens for thing=vic:<esn> in jdocs.json
+		if err := tokenserver.WriteTokenHash(esn, hash); err != nil {
+			http.Error(w, "failed to write vic.AppTokens: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		fmt.Fprint(w, "saved vic.AppTokens hash into jdocs.json")
 		return
 	case r.URL.Path == "/api-sdk/get_sdk_settings":
 		i := 0
@@ -523,23 +728,23 @@ func SdkapiHandler(w http.ResponseWriter, r *http.Request) {
 	case r.URL.Path == "/api-sdk/trigger_wake_word":
 		robotIP := strings.Split(robotObj.Target, ":")[0]
 		consoleURL := fmt.Sprintf("http://%s:8889/consolevarset?key=FakeButtonPressType&value=singlePressDetected", robotIP)
-		
+
 		client := &http.Client{
 			Timeout: 10 * time.Second,
 		}
-		
+
 		resp, err := client.Get(consoleURL)
 		if err != nil {
 			http.Error(w, "Failed to trigger wake word: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 		defer resp.Body.Close()
-		
+
 		if resp.StatusCode != http.StatusOK {
 			http.Error(w, "Consolevars returned error", resp.StatusCode)
 			return
 		}
-		
+
 		fmt.Fprint(w, "success")
 		return
 	}

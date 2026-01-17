@@ -130,6 +130,71 @@
         </div>
         <hr />
         <div>
+          <h3>Manual botSdkInfo (ESN / LAN IP / GUID)</h3>
+          <hr class="small-hr">
+          <small class="desc">
+            Use this if you want to manually configure robot connection info (used for SDK/gRPC calls like SayText / audio playback).
+            IP should be the robot's LAN IPv4 (no <code>:443</code>). ESN is the robot serial (8 hex chars). You can leave GUID blank and Wire-Pod will generate one on Save.
+          </small>
+          <div id="manualBotInfoStatus" style="margin-top: 10px;"></div>
+          <div class="manual-botinfo-card">
+            <label for="manualEsnSelect">ESN (Serial):</label><br />
+            <div class="manual-botinfo-row">
+              <select class="tinput" id="manualEsnSelect" name="manualEsnSelect" style="font-family: monospace; min-width: 260px;" onchange="onManualEsnChange()">
+                <option value="">Loading...</option>
+              </select>
+              <button onclick="openDeleteBotInfoModal()">Delete</button>
+            </div>
+            <small class="desc">Chọn ESN có sẵn hoặc chọn "➕ New ESN..." để thêm ESN mới.</small><br />
+            <input class="tinput" type="text" id="manualEsn" name="manualEsn" placeholder="e.g. 00603f9b" style="font-family: monospace; display: none;" /><br />
+            <label for="manualLanIp">LAN IP (robot):</label><br />
+            <input class="tinput" type="text" id="manualLanIp" name="manualLanIp" placeholder="e.g. 192.168.1.150" style="font-family: monospace;" /><br />
+            <label for="manualGuid">GUID / Token:</label><br />
+            <input class="tinput" type="text" id="manualGuid" name="manualGuid" placeholder="(optional) leave blank to auto-generate" style="font-family: monospace;" /><br />
+
+            <label for="manualAppTokensHash">vic.AppTokens hash (optional but useful for migrate):</label><br />
+            <input class="tinput" type="text" id="manualAppTokensHash" name="manualAppTokensHash"
+              placeholder='Paste hash from jdocs.json (e.g. mne81Zf...=)' style="font-family: monospace;" /><br />
+            <small class="desc">
+              Đây là <b>hash</b> trong <code>jdocs.json → vic.AppTokens → json_doc → client_tokens[0].hash</code>.
+              Bấm "Save AppTokens" để ghi/merge vào jdocs.json máy này.
+            </small>
+            <details style="margin-top: 10px;">
+              <summary>Optional: GlobalGUID (fallback)</summary>
+              <small class="desc">Used only when a robot entry doesn't have its own GUID.</small><br />
+              <label for="manualGlobalGuid">GlobalGUID:</label><br />
+              <input class="tinput" type="text" id="manualGlobalGuid" name="manualGlobalGuid" placeholder="e.g. tni1TRsTRTaNSapjo0Y+Sw==" style="font-family: monospace;" />
+            </details>
+            <hr class="small-hr">
+            <button onclick="loadManualBotInfo()">Load current</button>
+            <button onclick="saveManualBotInfo()">Save</button>
+            <button onclick="saveManualAppTokens()">Save AppTokens</button>
+
+            <hr class="small-hr">
+            <h4 style="margin: 8px 0;">Export / Import</h4>
+            <small class="desc">Xuất/nhập gói cấu hình để chuyển bot sang máy khác (botSdkInfo + session-certs + .anki_vector + jdocs cho bot).</small>
+            <div class="manual-botinfo-row" style="margin-top: 10px;">
+              <button onclick="exportBotAuthBundle()">Export (.zip)</button>
+              <button onclick="triggerImportBotAuthBundle()">Import (.zip)</button>
+              <input type="file" id="botAuthImportFile" accept=".zip" style="display:none" onchange="handleImportBotAuthBundle(event)" />
+            </div>
+            <div id="botAuthTransferStatus" style="margin-top: 10px;"></div>
+          </div>
+        </div>
+
+        <!-- Delete confirmation modal -->
+        <div id="deleteBotInfoModal" class="wp-modal-overlay" style="display:none;" onclick="closeDeleteBotInfoModal(true)">
+          <div class="wp-modal" onclick="event.stopPropagation()">
+            <h3 style="margin-top: 0;">Confirm delete</h3>
+            <p id="deleteBotInfoModalText" style="margin-top: 8px;">Are you sure?</p>
+            <div class="wp-modal-actions">
+              <button onclick="closeDeleteBotInfoModal(true)">Cancel</button>
+              <button class="danger" onclick="confirmDeleteManualBotInfo()">Delete</button>
+            </div>
+          </div>
+        </div>
+        <hr />
+        <div>
           <h3>Configure an OSKR/dev-unlocked robot</h3>
           <hr class="small-hr">
           <small class="desc">Works with firmware 1.4 and above.</small>

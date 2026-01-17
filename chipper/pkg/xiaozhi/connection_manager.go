@@ -114,6 +114,11 @@ func StartReader(deviceID string, conn *websocket.Conn, sessionID string) {
 
 		// Ping goroutine to keep connection alive
 		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					logger.Println(fmt.Sprintf("[ConnectionManager] PANIC in ping goroutine for device %s (recovered): %v", deviceID, r))
+				}
+			}()
 			for {
 				select {
 				case <-pingTicker.C:
@@ -151,7 +156,25 @@ func StartReader(deviceID string, conn *websocket.Conn, sessionID string) {
 			// Read message - blocking read like go-xiaozhi-main (no SetReadDeadline, no recover)
 			// go-xiaozhi-main pattern: msgType, msg, merr := w.conn.ReadMessage()
 			// if merr != nil { w.done <- struct{}{}; break }
-			messageType, message, err := conn.ReadMessage()
+			// CRITICAL: Add recover to prevent panic from crashing the entire reader goroutine
+			var messageType int
+			var message []byte
+			var err error
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						logger.Println(fmt.Sprintf("[ConnectionManager] PANIC in reader goroutine for device %s (recovered): %v", deviceID, r))
+						// Mark connection as invalid and stop reader
+						connInfo.mu.Lock()
+						connInfo.ReaderRunning = false
+						connInfo.Conn = nil
+						connInfo.mu.Unlock()
+						err = fmt.Errorf("panic recovered: %v", r)
+					}
+				}()
+				messageType, message, err = conn.ReadMessage()
+			}()
+
 			if err != nil {
 				// Error occurred - stop reader like go-xiaozhi-main
 				// IMPORTANT: Don't deactivate handlers immediately - keep them for potential reactivation
@@ -171,7 +194,20 @@ func StartReader(deviceID string, conn *websocket.Conn, sessionID string) {
 
 				logger.Println(fmt.Sprintf("[ConnectionManager] Read error for device %s: %v, connection marked as invalid immediately (handlers kept for reactivation)", deviceID, err))
 
-				// Remove connection from manager immediately (no wait)
+				// CRITICAL: Stop ping goroutine BEFORE removing connection from map
+				// This prevents ping goroutine from accessing connInfo after it's deleted
+				// Send stop signal to ping goroutine (via ReaderStop channel)
+				select {
+				case connInfo.ReaderStop <- struct{}{}:
+					logger.Println(fmt.Sprintf("[ConnectionManager] Stop signal sent to ping goroutine for device %s", deviceID))
+				default:
+					// Channel might be full or already closed, but that's okay
+				}
+
+				// Wait a bit for ping goroutine to stop before removing from map
+				time.Sleep(50 * time.Millisecond)
+
+				// Remove connection from manager
 				// STT handler will create new connection when needed and reactivate handlers
 				go func(devID string) {
 					// Small delay to ensure all cleanup is done
@@ -275,9 +311,13 @@ func SetSTTHandler(deviceID string, handler MessageHandler) {
 		connInfo.STTHandler = handler
 		if handler != nil {
 			handler.SetActive(true)
+			// CRITICAL: Reset LastAudioChunkTime when STT handler is activated
+			// This prevents false positive in IsRobotListening() check
+			// (old LastAudioChunkTime from previous session might still be within 2s window)
+			connInfo.LastAudioChunkTime = time.Time{} // Reset to zero time
 		}
 		connInfo.mu.Unlock()
-		logger.Println(fmt.Sprintf("[ConnectionManager] STT handler set for device: %s (active: true)", deviceID))
+		logger.Println(fmt.Sprintf("[ConnectionManager] STT handler set for device: %s (active: true, LastAudioChunkTime reset)", deviceID))
 	}
 }
 
@@ -313,8 +353,12 @@ func ActivateSTTHandler(deviceID string) bool {
 		connInfo.mu.Lock()
 		if connInfo.STTHandler != nil {
 			connInfo.STTHandler.SetActive(true)
+			// CRITICAL: Reset LastAudioChunkTime when STT handler is reactivated
+			// This prevents false positive in IsRobotListening() check
+			// (old LastAudioChunkTime from previous session might still be within 2s window)
+			connInfo.LastAudioChunkTime = time.Time{} // Reset to zero time
 			connInfo.mu.Unlock()
-			logger.Println(fmt.Sprintf("[ConnectionManager] STT handler activated for device: %s", deviceID))
+			logger.Println(fmt.Sprintf("[ConnectionManager] STT handler activated for device: %s (LastAudioChunkTime reset)", deviceID))
 			return true
 		}
 		connInfo.mu.Unlock()
@@ -590,21 +634,36 @@ func RemoveConnection(deviceID string) {
 // Use this when you want to explicitly close the connection
 func CloseConnection(deviceID string) {
 	connManager.mu.Lock()
-	defer connManager.mu.Unlock()
+	connInfo, exists := connManager.connections[deviceID]
+	connManager.mu.Unlock()
 
-	if connInfo, exists := connManager.connections[deviceID]; exists {
+	if exists {
 		logger.Println(fmt.Sprintf("[ConnectionManager] Closing and removing connection for device: %s", deviceID))
-		// Stop reader goroutine
+		// Deactivate handlers
+		if connInfo.LLMHandler != nil {
+			connInfo.LLMHandler.SetActive(false)
+		}
+		if connInfo.STTHandler != nil {
+			connInfo.STTHandler.SetActive(false)
+		}
+		// CRITICAL: Stop reader and ping goroutine BEFORE closing connection
+		// This prevents goroutines from accessing connInfo after it's deleted
 		if connInfo.ReaderRunning {
 			select {
 			case connInfo.ReaderStop <- struct{}{}:
+				logger.Println(fmt.Sprintf("[ConnectionManager] Stop signal sent to reader/ping goroutines for device %s", deviceID))
 			default:
 			}
 		}
+		// Wait a bit for goroutines to stop
+		time.Sleep(50 * time.Millisecond)
 		if connInfo.Conn != nil {
 			connInfo.Conn.Close()
 		}
+		// Now safe to remove from map
+		connManager.mu.Lock()
 		delete(connManager.connections, deviceID)
+		connManager.mu.Unlock()
 	}
 }
 

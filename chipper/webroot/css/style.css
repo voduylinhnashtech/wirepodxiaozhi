@@ -98,6 +98,65 @@ button:hover, button[type="submit"]:disabled {
   color: var(--text-color-alt);
 }
 
+/* Manual botSdkInfo card */
+.manual-botinfo-card {
+  margin: 14px auto 0 auto;
+  padding: 14px 16px;
+  max-width: 560px;
+  text-align: left;
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 10px;
+  background: rgba(0,0,0,0.2);
+}
+
+.manual-botinfo-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+/* Modal */
+.wp-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+  padding: 16px;
+}
+
+.wp-modal {
+  width: 100%;
+  max-width: 420px;
+  background: #2d2d2d;
+  border: 1px solid rgba(255,255,255,0.14);
+  border-radius: 12px;
+  padding: 16px;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.45);
+  color: var(--text-color);
+}
+
+.wp-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+button.danger {
+  border-color: #ff4d4d;
+}
+
+button.danger:hover {
+  background-color: #ff4d4d;
+  border-color: #ff4d4d;
+  color: #111;
+}
+
 .dropdown-content {
   display: none;
   position: absolute;

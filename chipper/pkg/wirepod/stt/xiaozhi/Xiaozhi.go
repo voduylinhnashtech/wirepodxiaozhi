@@ -96,9 +96,9 @@ func (h *STTHandler) HandleMessage(messageType int, message []byte) error {
 						select {
 						case h.transcriptChan <- "":
 							logger.Println(fmt.Sprintf("Xiaozhi STT Handler: ✅ Empty transcript sent to channel (server returned empty text) - handler will remain active for potential TTS messages"))
-							h.mu.Lock()
-							h.transcriptReceived = true
-							h.mu.Unlock()
+							// IMPORTANT: Do NOT mark transcriptReceived=true for empty transcripts.
+							// If we do, IsActive() becomes false and the handler stops receiving messages,
+							// breaking subsequent STT attempts even though the websocket is still alive.
 						default:
 							logger.Println(fmt.Sprintf("Xiaozhi STT Handler: ⚠️  transcriptChan is full, dropping empty transcript"))
 						}
@@ -148,7 +148,9 @@ func (h *STTHandler) SetActive(active bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.active = active
-	if !active {
+	// IMPORTANT: Always clear transcriptReceived when (re)activating, so the handler
+	// can receive messages on the next STT request.
+	if active {
 		h.transcriptReceived = false
 	}
 }
@@ -765,6 +767,7 @@ func STT(sreq sr.SpeechRequest) (string, error) {
 		time.Sleep(50 * time.Millisecond)
 		logger.Println("Xiaozhi STT: Ready to send audio chunks (after 50ms delay)")
 
+	continueLoop:
 		for {
 			select {
 			case <-done:
@@ -815,7 +818,56 @@ func STT(sreq sr.SpeechRequest) (string, error) {
 					// Don't send to errChan, just return empty transcript (connection will be kept for reuse)
 					errStr := err.Error()
 					if strings.Contains(errStr, "context canceled") || strings.Contains(errStr, "DeadlineExceeded") || strings.Contains(errStr, "deadline exceeded") || strings.Contains(errStr, "Canceled") {
-						logger.Println(fmt.Sprintf("Xiaozhi STT: ⚠️  Context canceled while getting audio chunk (user cancel or timeout) - returning empty transcript, keeping connection"))
+						// CRITICAL: Nếu chưa có audio chunks nào (chunkCount == 0), có thể là timeout quá sớm
+						// (ví dụ: user vừa mở mic, chưa kịp nói). Trong trường hợp này, đợi thêm một chút
+						// để user có cơ hội nói trước khi return empty transcript
+						if chunkCount == 0 {
+							logger.Println(fmt.Sprintf("Xiaozhi STT: ⚠️  Context canceled/timeout with 0 chunks - likely timeout too early after mic opened. Waiting 2s more for user to speak..."))
+							// Đợi thêm 2 giây để user có cơ hội nói
+							time.Sleep(2 * time.Second)
+							// Thử lấy thêm một chunk nữa
+							retryChunk, retryErr := sreq.GetNextStreamChunkOpus()
+							if retryErr == nil && len(retryChunk) > 0 {
+								// Có audio! Xử lý chunk này ngay
+								logger.Println(fmt.Sprintf("Xiaozhi STT: ✅ Got audio chunk after retry, processing..."))
+								chunk = retryChunk // Sử dụng chunk từ retry
+								chunkCount++
+								if deviceID != "" {
+									xiaozhi.UpdateLastAudioChunkTime(deviceID)
+								}
+								// Tiếp tục xử lý chunk này (không return, tiếp tục vòng lặp)
+								// Chunk sẽ được xử lý ở phần code phía dưới (encode và gửi)
+							} else {
+								// Vẫn không có audio sau retry, return empty transcript
+								logger.Println(fmt.Sprintf("Xiaozhi STT: ⚠️  Still no audio after retry, returning empty transcript"))
+								// Signal done to stop audio sending loop
+								select {
+								case done <- true:
+								default:
+								}
+								// Send empty transcript to transcriptChan (not error)
+								select {
+								case transcriptChan <- "":
+									logger.Println("Xiaozhi STT: Empty transcript sent to channel (context canceled)")
+								default:
+								}
+								return
+							}
+						} else {
+							logger.Println(fmt.Sprintf("Xiaozhi STT: ⚠️  Context canceled while getting audio chunk (user cancel or timeout) - returning empty transcript, keeping connection"))
+							// Signal done to stop audio sending loop
+							select {
+							case done <- true:
+							default:
+							}
+							// Send empty transcript to transcriptChan (not error)
+							select {
+							case transcriptChan <- "":
+								logger.Println("Xiaozhi STT: Empty transcript sent to channel (context canceled)")
+							default:
+							}
+							return
+						}
 						// Signal done to stop audio sending loop
 						select {
 						case done <- true:
@@ -1053,7 +1105,19 @@ func STT(sreq sr.SpeechRequest) (string, error) {
 					default:
 					}
 
-					logger.Println(fmt.Sprintf("Xiaozhi STT: End of speech detected after %d chunks. Audio was already streamed continuously (like botkct.py). Sending listen stop event...", chunkCount))
+					// CRITICAL: Kiểm tra xem có audio input thực sự từ user không
+					// Nếu chunkCount quá nhỏ (< 10), có thể là robot tự phát hiện "end of speech" quá sớm
+					// (ví dụ: ngay sau khi TTS dừng, robot chưa kịp nghe user nói)
+					// Trong trường hợp này, KHÔNG gửi listen stop event, tiếp tục đợi audio từ user
+					if chunkCount < 10 {
+						logger.Println(fmt.Sprintf("Xiaozhi STT: ⚠️  End of speech detected too early (only %d chunks) - likely false positive after TTS stop. Ignoring and continuing to wait for user audio...", chunkCount))
+						// Không gửi listen stop event, tiếp tục vòng lặp để đợi audio từ user
+						// Note: DetectEndOfSpeech() sẽ tự reset sau một khoảng thời gian
+						// Sử dụng goto để quay lại đầu vòng lặp (không thể dùng continue trong select)
+						goto continueLoop
+					}
+
+					logger.Println(fmt.Sprintf("Xiaozhi STT: End of speech detected after %d chunks (user likely finished speaking). Audio was already streamed continuously (like botkct.py). Sending listen stop event...", chunkCount))
 
 					// Send listen stop event
 					// go-xiaozhi-main: message = {"type": "listen", "mode": "manual", "state": "stop"} (KHÔNG có session_id)

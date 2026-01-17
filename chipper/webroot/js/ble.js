@@ -7,9 +7,19 @@ const externalSetup = document.createElement("a");
 externalSetup.href = vectorEpodSetup;
 externalSetup.innerHTML = vectorEpodSetup;
 
+// Cache for manual botSdkInfo UI
+let _manualBotInfoCache = null; // { global_guid, robots: [...] }
+let _manualEsnDropdownInitialized = false;
+
 function showBotAuth() {
   GetLog = false;
   toggleSections("section-botauth", "icon-BotAuth");
+  // Load current botSdkInfo into manual inputs (if available)
+  try {
+    loadManualBotInfo();
+  } catch (e) {
+    // ignore
+  }
   checkBLECapability();
 }
 
@@ -40,6 +50,356 @@ function showExternalSetupInstructions() {
     <br>
     <small class="desc">Note: with OSKR/dev robots, it might give a warning about firmware. This can be ignored.</small>
   `;
+}
+
+function _setManualBotInfoStatus(msg, isError) {
+  const el = document.getElementById("manualBotInfoStatus");
+  if (!el) return;
+  el.innerHTML = `<p style="margin:0; color:${isError ? "#b00020" : "#0b6e4f"}">${msg}</p>`;
+}
+
+function _setBotAuthTransferStatus(msg, isError) {
+  const el = document.getElementById("botAuthTransferStatus");
+  if (!el) return;
+  el.innerHTML = `<p style="margin:0; color:${isError ? "#b00020" : "#0b6e4f"}">${msg}</p>`;
+}
+
+function _normalizeEsn(esn) {
+  return (esn || "").trim().toLowerCase();
+}
+
+function _normalizeIp(ip) {
+  ip = (ip || "").trim();
+  // Allow user to paste "x.x.x.x:443" and strip the port
+  if (ip.includes(":")) {
+    const parts = ip.split(":");
+    if (parts.length >= 2 && /^\d+$/.test(parts[parts.length - 1])) {
+      ip = parts.slice(0, parts.length - 1).join(":");
+    }
+  }
+  return ip;
+}
+
+function _getManualEsnSelectedValue() {
+  const sel = document.getElementById("manualEsnSelect");
+  return sel ? sel.value : "";
+}
+
+function _setManualEsnSelectedValue(value) {
+  const sel = document.getElementById("manualEsnSelect");
+  if (!sel) return;
+  sel.value = value;
+}
+
+function _showManualEsnInput(show) {
+  const esnInput = document.getElementById("manualEsn");
+  if (!esnInput) return;
+  esnInput.style.display = show ? "block" : "none";
+}
+
+function _renderManualEsnOptions(robots, selectedEsn) {
+  const sel = document.getElementById("manualEsnSelect");
+  if (!sel) return;
+  sel.innerHTML = "";
+
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.text = robots && robots.length ? "Select ESN..." : "No robots found";
+  sel.appendChild(placeholder);
+
+  if (robots && robots.length) {
+    robots.forEach((r) => {
+      const opt = document.createElement("option");
+      opt.value = _normalizeEsn(r.esn);
+      opt.text = r.esn;
+      sel.appendChild(opt);
+    });
+  }
+
+  const addOpt = document.createElement("option");
+  addOpt.value = "__new__";
+  addOpt.text = "➕ New ESN...";
+  sel.appendChild(addOpt);
+
+  if (selectedEsn) {
+    sel.value = _normalizeEsn(selectedEsn);
+  }
+}
+
+function onManualEsnChange() {
+  const value = _getManualEsnSelectedValue();
+  const esnInput = document.getElementById("manualEsn");
+  const ipInput = document.getElementById("manualLanIp");
+  const guidInput = document.getElementById("manualGuid");
+  if (!ipInput || !guidInput) return;
+
+  if (value === "__new__") {
+    _showManualEsnInput(true);
+    if (esnInput) esnInput.value = "";
+    ipInput.value = "";
+    guidInput.value = "";
+    _setManualBotInfoStatus("Enter a new ESN, then fill IP/GUID and Save.", false);
+    return;
+  }
+
+  _showManualEsnInput(false);
+  if (!value) return;
+
+  const robots = (_manualBotInfoCache && _manualBotInfoCache.robots) ? _manualBotInfoCache.robots : [];
+  const chosen = robots.find((r) => _normalizeEsn(r.esn) === _normalizeEsn(value));
+  if (chosen) {
+    if (esnInput) esnInput.value = chosen.esn || "";
+    ipInput.value = chosen.ip_address || "";
+    guidInput.value = chosen.guid || "";
+  }
+}
+
+async function deleteManualBotInfo() {
+  const selVal = _getManualEsnSelectedValue();
+  const esnInput = document.getElementById("manualEsn");
+  const esn = selVal === "__new__" ? _normalizeEsn(esnInput?.value) : _normalizeEsn(selVal);
+  if (!esn) {
+    _setManualBotInfoStatus("Please select an ESN to delete.", true);
+    return;
+  }
+
+  try {
+    _setManualBotInfoStatus("Deleting...", false);
+    const body = new URLSearchParams();
+    body.set("esn", esn);
+    body.set("delete", "1");
+    const resp = await fetch("/api-sdk/set_bot_info", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body,
+    });
+    const txt = await resp.text();
+    if (!resp.ok) {
+      _setManualBotInfoStatus(`Delete failed: ${txt}`, true);
+      return;
+    }
+    _setManualBotInfoStatus(txt || "Deleted.", false);
+    await loadManualBotInfo();
+  } catch (e) {
+    _setManualBotInfoStatus(`Error deleting botSdkInfo: ${e}`, true);
+  }
+}
+
+function openDeleteBotInfoModal() {
+  const modal = document.getElementById("deleteBotInfoModal");
+  const text = document.getElementById("deleteBotInfoModalText");
+  if (!modal || !text) return;
+  const selVal = _getManualEsnSelectedValue();
+  const esnInput = document.getElementById("manualEsn");
+  const esn = selVal === "__new__" ? _normalizeEsn(esnInput?.value) : _normalizeEsn(selVal);
+  if (!esn || esn === "__new__") {
+    _setManualBotInfoStatus("Please select an ESN to delete.", true);
+    return;
+  }
+  text.textContent = `Delete ESN "${esn}" from botSdkInfo.json?`;
+  modal.style.display = "flex";
+}
+
+function closeDeleteBotInfoModal(cancelOnly) {
+  const modal = document.getElementById("deleteBotInfoModal");
+  if (!modal) return;
+  modal.style.display = "none";
+}
+
+async function confirmDeleteManualBotInfo() {
+  closeDeleteBotInfoModal();
+  await deleteManualBotInfo();
+}
+
+function exportBotAuthBundle() {
+  const selVal = _getManualEsnSelectedValue();
+  const esnInput = document.getElementById("manualEsn");
+  const esn = selVal && selVal !== "__new__" ? _normalizeEsn(selVal) : _normalizeEsn(esnInput?.value);
+  if (!esn) {
+    _setBotAuthTransferStatus("Please select an ESN to export.", true);
+    return;
+  }
+  _setBotAuthTransferStatus(`Exporting bundle for ${esn}...`, false);
+  // Trigger file download
+  window.location.href = `/api/bot_auth_export?esn=${encodeURIComponent(esn)}`;
+}
+
+function triggerImportBotAuthBundle() {
+  const input = document.getElementById("botAuthImportFile");
+  if (!input) return;
+  input.value = "";
+  input.click();
+}
+
+async function handleImportBotAuthBundle(evt) {
+  const file = evt?.target?.files?.[0];
+  if (!file) return;
+  try {
+    _setBotAuthTransferStatus("Importing bundle...", false);
+    const form = new FormData();
+    form.append("file", file);
+    const resp = await fetch("/api/bot_auth_import", {
+      method: "POST",
+      body: form,
+    });
+    const txt = await resp.text();
+    if (!resp.ok) {
+      _setBotAuthTransferStatus(`Import failed: ${txt}`, true);
+      return;
+    }
+    _setBotAuthTransferStatus(txt || "Import OK.", false);
+    await loadManualBotInfo();
+  } catch (e) {
+    _setBotAuthTransferStatus(`Import error: ${e}`, true);
+  }
+}
+
+async function loadManualBotInfo() {
+  try {
+    _setManualBotInfoStatus("Loading botSdkInfo...", false);
+    const resp = await fetch("/api-sdk/get_bot_info");
+    if (!resp.ok) {
+      _setManualBotInfoStatus(`Failed to load botSdkInfo (HTTP ${resp.status})`, true);
+      return;
+    }
+    const info = await resp.json();
+    const robots = (info && info.robots) ? info.robots : [];
+    const globalGuid = info && info.global_guid ? info.global_guid : "";
+    _manualBotInfoCache = info;
+
+    // If an ESN is already typed, prefer that robot entry; else pick first robot
+    const esnInput = document.getElementById("manualEsn");
+    const esnSelect = document.getElementById("manualEsnSelect");
+    const ipInput = document.getElementById("manualLanIp");
+    const guidInput = document.getElementById("manualGuid");
+    const globalGuidInput = document.getElementById("manualGlobalGuid");
+    if (!esnInput || !ipInput || !guidInput) return;
+
+    const selected = esnSelect ? esnSelect.value : "";
+    const wanted = selected && selected !== "__new__" ? _normalizeEsn(selected) : _normalizeEsn(esnInput.value);
+    let chosen = null;
+    if (wanted) {
+      chosen = robots.find((r) => _normalizeEsn(r.esn) === wanted);
+    }
+    if (!chosen && robots.length > 0) {
+      chosen = robots[0];
+    }
+
+    // Render dropdown options
+    _renderManualEsnOptions(robots, chosen ? chosen.esn : "");
+    if (chosen) {
+      _setManualEsnSelectedValue(_normalizeEsn(chosen.esn));
+      _showManualEsnInput(false);
+    } else {
+      // allow new ESN entry
+      _setManualEsnSelectedValue("__new__");
+      _showManualEsnInput(true);
+    }
+
+    if (chosen) {
+      esnInput.value = chosen.esn || "";
+      ipInput.value = chosen.ip_address || "";
+      guidInput.value = chosen.guid || "";
+    }
+    // Load AppTokens hash for this ESN (best-effort)
+    try {
+      const esnForTokens = chosen && chosen.esn ? _normalizeEsn(chosen.esn) : _normalizeEsn(esnInput.value);
+      const hashInput = document.getElementById("manualAppTokensHash");
+      if (hashInput && esnForTokens) {
+        const r2 = await fetch("/api-sdk/get_bot_apptokens?esn=" + encodeURIComponent(esnForTokens));
+        if (r2.ok) {
+          const j = await r2.json();
+          hashInput.value = j.hash || "";
+        } else {
+          hashInput.value = "";
+        }
+      }
+    } catch (e) {
+      // ignore
+    }
+    if (globalGuidInput) {
+      globalGuidInput.value = globalGuid || "";
+    }
+    _setManualBotInfoStatus("Loaded.", false);
+  } catch (e) {
+    _setManualBotInfoStatus(`Error loading botSdkInfo: ${e}`, true);
+  }
+}
+
+async function saveManualAppTokens() {
+  const selVal = _getManualEsnSelectedValue();
+  const esnInput = document.getElementById("manualEsn");
+  const esn = selVal && selVal !== "__new__" ? _normalizeEsn(selVal) : _normalizeEsn(esnInput?.value);
+  const hash = (document.getElementById("manualAppTokensHash")?.value || "").trim();
+  if (!esn) {
+    _setManualBotInfoStatus("ESN is required to save AppTokens.", true);
+    return;
+  }
+  if (!hash) {
+    _setManualBotInfoStatus("AppTokens hash is empty.", true);
+    return;
+  }
+  try {
+    _setManualBotInfoStatus("Saving AppTokens...", false);
+    const body = new URLSearchParams();
+    body.set("esn", esn);
+    body.set("hash", hash);
+    const resp = await fetch("/api-sdk/set_bot_apptokens", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body,
+    });
+    const txt = await resp.text();
+    if (!resp.ok) {
+      _setManualBotInfoStatus(`Save AppTokens failed: ${txt}`, true);
+      return;
+    }
+    _setManualBotInfoStatus(txt || "Saved AppTokens.", false);
+  } catch (e) {
+    _setManualBotInfoStatus(`Save AppTokens error: ${e}`, true);
+  }
+}
+
+async function saveManualBotInfo() {
+  const selVal = _getManualEsnSelectedValue();
+  const esn = selVal && selVal !== "__new__" ? _normalizeEsn(selVal) : _normalizeEsn(document.getElementById("manualEsn")?.value);
+  const ip = _normalizeIp(document.getElementById("manualLanIp")?.value);
+  const guid = (document.getElementById("manualGuid")?.value || "").trim();
+  const globalGuid = (document.getElementById("manualGlobalGuid")?.value || "").trim();
+
+  if (!esn || !ip) {
+    _setManualBotInfoStatus("ESN and LAN IP are required.", true);
+    return;
+  }
+  // GUID can be blank - backend can auto-generate it on save
+
+  try {
+    _setManualBotInfoStatus("Saving...", false);
+    const body = new URLSearchParams();
+    body.set("esn", esn);
+    body.set("ip_address", ip);
+    body.set("guid", guid);
+    body.set("global_guid", globalGuid);
+    if (!guid) {
+      body.set("auto_generate_guid", "1");
+    }
+
+    const resp = await fetch("/api-sdk/set_bot_info", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body,
+    });
+    const txt = await resp.text();
+    if (!resp.ok) {
+      _setManualBotInfoStatus(`Save failed: ${txt}`, true);
+      return;
+    }
+    _setManualBotInfoStatus(txt || "Saved.", false);
+    // Reload to show generated GUID (if any)
+    await loadManualBotInfo();
+  } catch (e) {
+    _setManualBotInfoStatus(`Error saving botSdkInfo: ${e}`, true);
+  }
 }
 
 function beginBLESetup() {
