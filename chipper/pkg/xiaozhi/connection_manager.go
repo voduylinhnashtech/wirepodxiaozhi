@@ -221,6 +221,12 @@ func StartReader(deviceID string, conn *websocket.Conn, sessionID string) {
 					}
 					connManager.mu.Unlock()
 					logger.Println(fmt.Sprintf("[ConnectionManager] Connection removed from manager for device %s (STT will create new connection when needed)", devID))
+
+					// CRITICAL: When websocket closes, audio client in pool may be invalid
+					// Remove audio client from pool to force recreation on next TTS
+					// Note: We need to get ESN from deviceID, but deviceID is MAC address
+					// For now, we'll let xiaozhi_kg.go handle this by checking robot connection validity
+					// (This is already implemented in the reuse logic)
 				}(deviceID)
 				return
 			}
@@ -339,7 +345,12 @@ func SetLLMHandler(deviceID string, handler MessageHandler) {
 			handler.SetActive(true)
 		}
 		connInfo.mu.Unlock()
-		logger.Println(fmt.Sprintf("[ConnectionManager] LLM handler set for device: %s (active: true)", deviceID))
+		logger.Println(fmt.Sprintf("[ConnectionManager] LLM handler set for device: %s (active: true, handler: %v)", deviceID, handler != nil))
+	} else {
+		// CRITICAL: Connection doesn't exist in manager yet
+		// This can happen if SetLLMHandler is called before connection is stored
+		// Log warning but don't fail - handler will be set when connection is created
+		logger.Println(fmt.Sprintf("[ConnectionManager] ⚠️  WARNING - Cannot set LLM handler for device %s: connection not found in manager. Handler will be set when connection is created.", deviceID))
 	}
 }
 

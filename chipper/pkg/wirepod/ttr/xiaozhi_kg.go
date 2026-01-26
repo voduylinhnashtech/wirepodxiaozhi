@@ -44,9 +44,11 @@ type AudioClientEntry struct {
 	Client interface {
 		Send(*vectorpb.ExternalAudioStreamRequest) error
 	}
-	Ctx    context.Context
-	Cancel context.CancelFunc
-	Robot  *vector.Vector // Keep robot reference to recreate if needed
+	Ctx       context.Context
+	Cancel    context.CancelFunc
+	Robot     *vector.Vector // Keep robot reference to recreate if needed
+	LastUsed  time.Time      // Track when client was last used (for detecting stale clients)
+	SessionID string         // Track session ID when client was created (to detect websocket reconnect)
 }
 
 var audioClientPool = make(map[string]*AudioClientEntry) // key: ESN
@@ -64,7 +66,9 @@ type LLMHandler struct {
 	ttsStopped              bool      // Flag to indicate TTS has stopped
 	lastFrameTime           time.Time // Track when last audio frame was received
 	esn                     string    // Robot ESN for checking first audio playback
+	websocketReconnected    bool      // Flag to indicate websocket was reconnected (for first chunk delay)
 	mu                      sync.RWMutex
+	sendMu                  sync.Mutex // Mutex to serialize vclient.Send() calls (gRPC streams are not thread-safe)
 	// Audio processing (synchronous)
 	vclient interface {
 		Send(*vectorpb.ExternalAudioStreamRequest) error
@@ -76,6 +80,11 @@ type LLMHandler struct {
 	lastSendTime      time.Time // Track when we last sent audio (for flush timer)
 	flushTimer        *time.Ticker
 	flushTimerStop    chan bool // Signal to stop flush timer
+	// Health check for audio playback
+	healthCheckTicker        *time.Ticker
+	healthCheckStop          chan bool // Signal to stop health check
+	lastHealthCheck          time.Time // Track last health check time
+	chunksSentSinceLastCheck int       // Track chunks sent since last health check
 }
 
 func padToMultiple(b []byte, multiple int) []byte {
@@ -162,10 +171,11 @@ func (h *LLMHandler) HandleMessage(messageType int, message []byte) error {
 					accumulatedBuffer := h.accumulatedBuffer
 					chunkCount := h.chunkCount
 					flushTimerStop := h.flushTimerStop
+					healthCheckStop := h.healthCheckStop
 					h.mu.Unlock()
 					logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] 🔊 TTS stopped, sending final buffer and completion"))
 
-					// IMPORTANT: Stop flush timer FIRST and wait for it to fully stop
+					// IMPORTANT: Stop flush timer and health check FIRST and wait for them to fully stop
 					// This ensures all pending chunks are sent before AudioStreamComplete
 					if flushTimerStop != nil {
 						select {
@@ -173,9 +183,16 @@ func (h *LLMHandler) HandleMessage(messageType int, message []byte) error {
 							logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] ✅ Flush timer stop signal sent"))
 						default:
 						}
-						// Wait for flush timer to fully stop (give it time to finish current flush cycle)
-						time.Sleep(200 * time.Millisecond)
 					}
+					if healthCheckStop != nil {
+						select {
+						case healthCheckStop <- true:
+							logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] ✅ Health check stop signal sent"))
+						default:
+						}
+					}
+					// Wait for timers to fully stop (give them time to finish current cycle)
+					time.Sleep(200 * time.Millisecond)
 
 					// Signal TTS stop
 					select {
@@ -486,6 +503,9 @@ func (h *LLMHandler) HandleMessage(messageType int, message []byte) error {
 					logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] 🔵 Calling vclient.Send() (retry %d/%d)...", retry+1, maxRetries))
 				}
 
+				// CRITICAL: Use sendMu to serialize vclient.Send() calls (gRPC streams are not thread-safe)
+				// This prevents race conditions when multiple goroutines call Send() simultaneously
+				h.sendMu.Lock()
 				// Use defer/recover to catch any panics
 				func() {
 					defer func() {
@@ -503,6 +523,7 @@ func (h *LLMHandler) HandleMessage(messageType int, message []byte) error {
 						},
 					})
 				}()
+				h.sendMu.Unlock() // Always unlock after Send() completes (success or error)
 
 				// Log after Send to track completion
 				if count <= 5 || retry == 0 {
@@ -526,6 +547,7 @@ func (h *LLMHandler) HandleMessage(messageType int, message []byte) error {
 						logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] 🟡 Lock acquired, updating chunkCount..."))
 					}
 					h.chunkCount++
+					h.chunksSentSinceLastCheck++
 					chunkCount := h.chunkCount
 					h.mu.Unlock()
 					if count <= 5 {
@@ -555,7 +577,14 @@ func (h *LLMHandler) HandleMessage(messageType int, message []byte) error {
 					// Lock is already released, so we can lock again safely
 					h.mu.Lock()
 					h.vclient = nil
+					esn := h.esn
 					h.mu.Unlock()
+					// CRITICAL: Remove invalid client from pool immediately
+					// This ensures next StreamingXiaozhiKG call will create a new client
+					if esn != "" {
+						RemoveAudioClient(esn)
+						logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] ⚠️  Removed invalid audio client from pool for ESN: %s (stream closed)", esn))
+					}
 					return nil
 				}
 				// Retry with exponential backoff
@@ -591,19 +620,18 @@ func (h *LLMHandler) HandleMessage(messageType int, message []byte) error {
 				h.mu.RLock()
 				esn := h.esn
 				h.mu.RUnlock()
-				// Check if this is first audio playback for this robot
-				// If client was reused from pool, pipeline is already warm, so shorter delay
-				// If this is new client, need longer delay
+				// CRITICAL: Audio pipeline is always open and warm (independent of websocket)
+				// Delay is only needed for robot to start audio playback, not for pipeline warm-up
+				// Since pipeline is always warm, we can use minimal delay
 				isFirstAudio := !hasRobotPlayedAudio(esn)
 				if isFirstAudio {
-					time.Sleep(time.Millisecond * 500) // Extra delay for first chunk on FIRST audio playback (new client, robot warm-up)
-					logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] ⏱️  First chunk sent (FIRST audio), waiting 500ms for robot audio pipeline warm-up"))
+					// First audio ever - robot needs time to initialize audio playback
+					time.Sleep(time.Millisecond * 300) // Minimal delay for first audio (pipeline is warm, only robot initialization)
+					logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] ⏱️  First chunk sent (FIRST audio ever), waiting 300ms for robot audio initialization (pipeline already warm)"))
 				} else {
-					// Robot has played before, but check if client was reused or new
-					// If client was reused, delay is already handled in StreamingXiaozhiKG (150ms)
-					// Here we just need normal delay for first chunk
-					time.Sleep(time.Millisecond * 60) // Normal delay for first chunk (robot already warm or client reused)
-					logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] ⏱️  First chunk sent (subsequent audio or reused client), normal 60ms delay"))
+					// Robot has played before - pipeline is warm, minimal delay needed
+					time.Sleep(time.Millisecond * 50) // Minimal delay - pipeline is warm, only need time for robot to start playback
+					logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] ⏱️  First chunk sent (pipeline always warm), waiting 50ms for robot to start playback"))
 				}
 			} else {
 				time.Sleep(time.Millisecond * 60) // Normal delay for subsequent chunks
@@ -742,6 +770,19 @@ func hasRobotPlayedAudio(esn string) bool {
 		}
 	}
 	return false // If queue doesn't exist, it's first time
+}
+
+// RemoveAudioClient removes an audio client from the pool (e.g., when stream is closed)
+func RemoveAudioClient(esn string) {
+	audioClientPoolMutex.Lock()
+	defer audioClientPoolMutex.Unlock()
+	if poolEntry, exists := audioClientPool[esn]; exists {
+		if poolEntry.Cancel != nil {
+			poolEntry.Cancel() // Cancel context to close stream
+		}
+		delete(audioClientPool, esn)
+		logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ✅ Removed audio client from pool (stream closed or invalid)", esn))
+	}
 }
 
 // StreamingXiaozhiKG handles knowledge graph requests using xiaozhi WebSocket
@@ -977,36 +1018,133 @@ func StreamingXiaozhiKG(esn string, transcribedText string, isKG bool, isConvers
 		audioClientPoolMutex.RUnlock()
 
 		if exists && poolEntry != nil {
-			// Reuse existing audio client (pipeline already warm!)
-			vclient = poolEntry.Client
-			logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ✅ REUSING persistent audio client (pipeline already warm)", esn))
-
-			// CRITICAL: Must send AudioStreamPrepare again for each TTS session
-			// Vector SDK requires Prepare before each audio playback (even with same client)
-			err := vclient.Send(&vectorpb.ExternalAudioStreamRequest{
-				AudioRequestType: &vectorpb.ExternalAudioStreamRequest_AudioStreamPrepare{
-					AudioStreamPrepare: &vectorpb.ExternalAudioStreamPrepare{
-						AudioFrameRate: 8000,
-						AudioVolume:    100,
-					},
-				},
-			})
-			if err != nil {
-				logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ⚠️  WARNING - Failed to send AudioStreamPrepare on reused client: %v. Will try to recreate.", esn, err))
-				// Remove invalid client from pool and create new one
+			// CRITICAL: Check if robot connection is still valid AND matches current robot before reusing client
+			// If robot connection was closed/reconnected (e.g., after websocket close), audio client may be invalid
+			robotValid := false
+			websocketReconnected := false
+			if robot != nil && robot.Conn != nil {
+				// CRITICAL: Check if websocket was reconnected (SessionID changed)
+				// When websocket reconnects, robot may need more time to process AudioStreamPrepare
+				// Even though audio client (gRPC stream) is independent of websocket, the robot's audio pipeline
+				// may need to be "reset" or "prepared" again after websocket reconnect
+				if poolEntry.SessionID != "" && sessionID != "" && poolEntry.SessionID != sessionID {
+					websocketReconnected = true
+					logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ⚠️  SessionID changed (old: %s, new: %s). Websocket was recreated - will use longer delay for AudioStreamPrepare.", esn, poolEntry.SessionID, sessionID))
+					// Update SessionID in pool entry (for logging)
+					audioClientPoolMutex.Lock()
+					if entry, exists := audioClientPool[esn]; exists {
+						entry.SessionID = sessionID
+					}
+					audioClientPoolMutex.Unlock()
+				}
+				// CRITICAL: Don't check poolEntry.Robot != robot because each StreamingXiaozhiKG call creates a NEW robot instance
+				// Audio client (gRPC stream) is independent of robot instance - it only depends on robot IP/GUID
+				// Instead, test the current robot connection to see if it's valid and can use the audio client
+				// Test robot connection with a simple call (timeout 2s to avoid blocking)
+				testCtx, testCancel := context.WithTimeout(context.Background(), 2*time.Second)
+				_, err := robot.Conn.BatteryState(testCtx, &vectorpb.BatteryStateRequest{})
+				testCancel()
+				if err == nil {
+					robotValid = true
+					logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ✅ Robot connection is valid, can reuse audio client (robot instance may differ but connection is same)", esn))
+				} else {
+					logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ⚠️  Robot connection test failed: %v. Will remove invalid client from pool and create new one.", esn, err))
+					// Remove invalid client from pool
+					audioClientPoolMutex.Lock()
+					if poolEntry.Cancel != nil {
+						poolEntry.Cancel() // Cancel context to close stream
+					}
+					delete(audioClientPool, esn)
+					audioClientPoolMutex.Unlock()
+					// Fall through to create new client
+					vclient = nil
+					audioPrepareSent = false
+				}
+			} else {
+				logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ⚠️  Robot connection is nil, cannot reuse audio client. Will remove from pool.", esn))
+				// Remove client from pool since robot connection is invalid
 				audioClientPoolMutex.Lock()
+				if poolEntry.Cancel != nil {
+					poolEntry.Cancel() // Cancel context to close stream
+				}
 				delete(audioClientPool, esn)
 				audioClientPoolMutex.Unlock()
 				// Fall through to create new client
 				vclient = nil
 				audioPrepareSent = false
-			} else {
-				logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ✅ AudioStreamPrepare sent on reused client (8kHz, volume 100)", esn))
-				audioPrepareSent = true
-				// Delay for reused client (need time for robot to process Prepare even if pipeline is warm)
-				// Increased from 50ms to 150ms to ensure robot is ready
-				time.Sleep(time.Millisecond * 150)
-				logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ✅ Delay after AudioStreamPrepare completed (150ms for reused client)", esn))
+			}
+
+			if robotValid {
+				// CRITICAL: Check if audio client context is still valid (not canceled)
+				// If context was canceled (e.g., after websocket close), audio stream is closed
+				if poolEntry.Ctx != nil {
+					select {
+					case <-poolEntry.Ctx.Done():
+						// Context was canceled - audio stream is closed, cannot reuse
+						logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ⚠️  Audio client context was canceled (stream closed). Will remove from pool and create new one.", esn))
+						// Remove invalid client from pool
+						audioClientPoolMutex.Lock()
+						delete(audioClientPool, esn)
+						audioClientPoolMutex.Unlock()
+						// Fall through to create new client
+						vclient = nil
+						audioPrepareSent = false
+						robotValid = false // Prevent reuse
+					default:
+						// Context is still valid - can reuse
+					}
+				}
+
+				if robotValid {
+					// Reuse existing audio client (pipeline already warm!)
+					vclient = poolEntry.Client
+					if websocketReconnected {
+						logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ✅ REUSING persistent audio client (pipeline already warm, context valid) - BUT websocket reconnected, will use longer delay", esn))
+					} else {
+						logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ✅ REUSING persistent audio client (pipeline already warm, context valid)", esn))
+					}
+
+					// CRITICAL: Must send AudioStreamPrepare again for each TTS session
+					// Vector SDK requires Prepare before each audio playback (even with same client)
+					// When websocket reconnects, robot may need more time to process Prepare (similar to new client)
+					err := vclient.Send(&vectorpb.ExternalAudioStreamRequest{
+						AudioRequestType: &vectorpb.ExternalAudioStreamRequest_AudioStreamPrepare{
+							AudioStreamPrepare: &vectorpb.ExternalAudioStreamPrepare{
+								AudioFrameRate: 8000,
+								AudioVolume:    100,
+							},
+						},
+					})
+					if err != nil {
+						logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ⚠️  WARNING - Failed to send AudioStreamPrepare on reused client (stream may be closed): %v. Will remove from pool and create new one.", esn, err))
+						// Remove invalid client from pool and create new one
+						audioClientPoolMutex.Lock()
+						if poolEntry.Cancel != nil {
+							poolEntry.Cancel() // Cancel context to close stream
+						}
+						delete(audioClientPool, esn)
+						audioClientPoolMutex.Unlock()
+						// Fall through to create new client
+						vclient = nil
+						audioPrepareSent = false
+						robotValid = false // Prevent reuse
+					} else {
+						audioPrepareSent = true
+						if websocketReconnected {
+							// CRITICAL: When websocket reconnects, robot needs more time to process AudioStreamPrepare
+							// This is similar to creating a new client - robot's audio pipeline may need to be "reset"
+							// Use longer delay (similar to new client after reconnect) to ensure audio plays correctly
+							logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ✅ AudioStreamPrepare sent on reused client (8kHz, volume 100) - stream is valid, BUT websocket reconnected, using longer delay", esn))
+							time.Sleep(time.Millisecond * 1200) // Longer delay when websocket reconnects (similar to new client)
+							logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ✅ Delay after AudioStreamPrepare completed (1200ms - websocket reconnected, robot needs time to process)", esn))
+						} else {
+							// Normal reuse - pipeline is warm, minimal delay needed
+							logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ✅ AudioStreamPrepare sent on reused client (8kHz, volume 100) - stream is valid, pipeline is warm", esn))
+							time.Sleep(time.Millisecond * 50) // Minimal delay - pipeline is warm, only need time for robot to process Prepare
+							logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ✅ Delay after AudioStreamPrepare completed (50ms - pipeline always warm, only robot processing time)", esn))
+						}
+					}
+				}
 			}
 		}
 
@@ -1045,30 +1183,37 @@ func StreamingXiaozhiKG(esn string, transcribedText string, isKG bool, isConvers
 					logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ✅ AudioStreamPrepare sent successfully (8kHz, volume 100)", esn))
 					audioPrepareSent = true
 
-					// Delay only needed for FIRST time creating client (robot warm-up)
+					// Delay needed for NEW client creation (whether first time or after reconnect)
+					// Even if robot has played audio before, this is a NEW stream, so needs longer delay
 					// If client is reused from pool, pipeline is already warm (handled above)
-					// This is a NEW client creation, so check if robot has played audio before
+					// This is a NEW client creation, so always use longer delay for new stream
 					isFirstAudio := !hasRobotPlayedAudio(esn)
 					if isFirstAudio {
-						time.Sleep(time.Millisecond * 700) // Longer delay for first audio (robot warm-up) - increased from 500ms
-						logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ✅ Delay after AudioStreamPrepare completed (700ms for FIRST audio - robot warm-up)", esn))
+						time.Sleep(time.Millisecond * 1500) // Longer delay for first audio ever (robot warm-up) - increased from 1000ms to 1500ms
+						logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ✅ Delay after AudioStreamPrepare completed (1500ms for FIRST audio ever - robot warm-up)", esn))
 					} else {
 						// Robot has played audio before, but this is a NEW client (pool was empty or old client failed)
-						// Still need some delay, but less than first time
-						time.Sleep(time.Millisecond * 200) // Medium delay for new client but robot has played before
-						logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ✅ Delay after AudioStreamPrepare completed (200ms for new client, robot has played before)", esn))
+						// After websocket close/reconnect, robot needs time to reset audio pipeline for new stream
+						// Increased from 500ms to 1200ms to ensure robot is ready for new stream
+						time.Sleep(time.Millisecond * 1200) // Longer delay for new client after websocket reconnect (new stream needs time)
+						logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ✅ Delay after AudioStreamPrepare completed (1200ms for new client after reconnect - new stream needs time)", esn))
 					}
 
 					// Store in pool for reuse (keep pipeline warm)
+					// NOTE: SessionID is tracked but NOT used to invalidate audio client
+					// Audio client only depends on robot connection, not websocket connection
 					audioClientPoolMutex.Lock()
 					audioClientPool[esn] = &AudioClientEntry{
-						Client: audioClient,
-						Ctx:    persistentAudioCtx,
-						Cancel: persistentAudioCancel,
-						Robot:  robot,
+						Client:    audioClient,
+						Ctx:       persistentAudioCtx,
+						Cancel:    persistentAudioCancel,
+						Robot:     robot,
+						LastUsed:  time.Now(),
+						SessionID: sessionID, // Track sessionID for logging only (not used to invalidate)
 					}
 					audioClientPoolMutex.Unlock()
-					logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ✅ Audio client stored in pool (will be reused for next TTS, pipeline stays warm)", esn))
+					logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ✅ Audio client stored in pool (will be reused for next TTS, pipeline stays warm, sessionID: %s)", esn, sessionID))
+					logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ℹ️  Audio pipeline will remain open even if websocket reconnects (audio client independent of websocket)", esn))
 				}
 			}
 		}
@@ -1093,12 +1238,20 @@ func StreamingXiaozhiKG(esn string, transcribedText string, isKG bool, isConvers
 			llmHandler.lastSendTime = time.Now()
 			llmHandler.flushTimer = time.NewTicker(50 * time.Millisecond)
 			llmHandler.flushTimerStop = make(chan bool, 1)
+			// Start health check ticker (check every 2 seconds)
+			llmHandler.healthCheckTicker = time.NewTicker(2 * time.Second)
+			llmHandler.healthCheckStop = make(chan bool, 1)
+			llmHandler.lastHealthCheck = time.Now()
+			llmHandler.chunksSentSinceLastCheck = 0
 			llmHandler.mu.Unlock()
 			logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ✅ Audio setup complete BEFORE text query - vclient and opusDecoder ready", esn))
 
 			// Start flush timer goroutine
 			go func() {
 				defer func() {
+					if r := recover(); r != nil {
+						logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] PANIC in flush timer goroutine (recovered): %v", r))
+					}
 					llmHandler.mu.Lock()
 					if llmHandler.flushTimer != nil {
 						llmHandler.flushTimer.Stop()
@@ -1141,6 +1294,8 @@ func StreamingXiaozhiKG(esn string, transcribedText string, isKG bool, isConvers
 								for len(finalBuf) >= vectorAudioChunkBytes {
 									chunk := finalBuf[:vectorAudioChunkBytes]
 									finalBuf = finalBuf[vectorAudioChunkBytes:]
+									// CRITICAL: Use sendMu to serialize vclient.Send() calls
+									llmHandler.sendMu.Lock()
 									err := vclient.Send(&vectorpb.ExternalAudioStreamRequest{
 										AudioRequestType: &vectorpb.ExternalAudioStreamRequest_AudioStreamChunk{
 											AudioStreamChunk: &vectorpb.ExternalAudioStreamChunk{
@@ -1149,6 +1304,7 @@ func StreamingXiaozhiKG(esn string, transcribedText string, isKG bool, isConvers
 											},
 										},
 									})
+									llmHandler.sendMu.Unlock()
 									if err != nil {
 										logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] ⚠️  Failed to send final buffer chunk before auto-complete: %v", err))
 										break
@@ -1166,11 +1322,14 @@ func StreamingXiaozhiKG(esn string, transcribedText string, isKG bool, isConvers
 							}
 
 							// Send AudioStreamComplete
+							// CRITICAL: Use sendMu to serialize vclient.Send() calls
+							llmHandler.sendMu.Lock()
 							err := vclient.Send(&vectorpb.ExternalAudioStreamRequest{
 								AudioRequestType: &vectorpb.ExternalAudioStreamRequest_AudioStreamComplete{
 									AudioStreamComplete: &vectorpb.ExternalAudioStreamComplete{},
 								},
 							})
+							llmHandler.sendMu.Unlock()
 							if err == nil {
 								logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] ✅ Auto-sent AudioStreamComplete (total chunks: %d)", chunkCount))
 								select {
@@ -1192,6 +1351,8 @@ func StreamingXiaozhiKG(esn string, transcribedText string, isKG bool, isConvers
 						if len(accumulatedBuffer) >= vectorAudioChunkBytes && vclient != nil && time.Since(lastSendTime) > 50*time.Millisecond {
 							chunkToSend := accumulatedBuffer[:vectorAudioChunkBytes]
 							remaining := accumulatedBuffer[vectorAudioChunkBytes:]
+							// CRITICAL: Use sendMu to serialize vclient.Send() calls
+							llmHandler.sendMu.Lock()
 							err := vclient.Send(&vectorpb.ExternalAudioStreamRequest{
 								AudioRequestType: &vectorpb.ExternalAudioStreamRequest_AudioStreamChunk{
 									AudioStreamChunk: &vectorpb.ExternalAudioStreamChunk{
@@ -1200,6 +1361,7 @@ func StreamingXiaozhiKG(esn string, transcribedText string, isKG bool, isConvers
 									},
 								},
 							})
+							llmHandler.sendMu.Unlock()
 							if err != nil {
 								if strings.Contains(err.Error(), "EOF") || strings.Contains(err.Error(), "closed") {
 									logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] ⚠️  vclient stream closed (EOF/closed)"))
@@ -1212,6 +1374,7 @@ func StreamingXiaozhiKG(esn string, transcribedText string, isKG bool, isConvers
 							} else {
 								llmHandler.mu.Lock()
 								llmHandler.chunkCount++
+								llmHandler.chunksSentSinceLastCheck++
 								llmHandler.accumulatedBuffer = remaining
 								llmHandler.lastSendTime = time.Now()
 								llmHandler.mu.Unlock()
@@ -1219,6 +1382,86 @@ func StreamingXiaozhiKG(esn string, transcribedText string, isKG bool, isConvers
 							}
 						}
 					case <-llmHandler.flushTimerStop:
+						return
+					}
+				}
+			}()
+
+			// Start health check goroutine to monitor audio playback
+			go func() {
+				defer func() {
+					if r := recover(); r != nil {
+						logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] PANIC in health check goroutine (recovered): %v", r))
+					}
+					llmHandler.mu.Lock()
+					if llmHandler.healthCheckTicker != nil {
+						llmHandler.healthCheckTicker.Stop()
+					}
+					llmHandler.mu.Unlock()
+				}()
+				for {
+					select {
+					case <-llmHandler.healthCheckTicker.C:
+						llmHandler.mu.Lock()
+						vclient := llmHandler.vclient
+						chunkCount := llmHandler.chunkCount
+						chunksSentSinceLastCheck := llmHandler.chunksSentSinceLastCheck
+						lastHealthCheck := llmHandler.lastHealthCheck
+						esn := llmHandler.esn
+						llmHandler.mu.Unlock()
+
+						// Health check: Monitor audio playback status
+						// Even if chunks are sent successfully (log shows success), audio might not be playing on robot
+						// This is a preventive mechanism to ensure audio is actually playing
+						//
+						// Logic:
+						// - If we've sent many chunks (>30) and many chunks since last check (>15),
+						//   it means we're actively sending audio but might not be playing
+						// - Resend AudioStreamPrepare to restart audio pipeline
+						// - This helps recover from cases where gRPC sends succeed but robot doesn't play audio
+						timeSinceLastCheck := time.Since(lastHealthCheck)
+						if vclient != nil && chunkCount > 30 && chunksSentSinceLastCheck > 15 && timeSinceLastCheck > 2*time.Second {
+							// Many chunks sent but audio might not be playing - resend AudioStreamPrepare
+							logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] 🏥 Health check: Sent %d chunks since last check (total: %d, time: %v) - even though logs show success, resending AudioStreamPrepare to ensure audio is actually playing on robot", chunksSentSinceLastCheck, chunkCount, timeSinceLastCheck))
+
+							// Resend AudioStreamPrepare
+							llmHandler.sendMu.Lock()
+							err := vclient.Send(&vectorpb.ExternalAudioStreamRequest{
+								AudioRequestType: &vectorpb.ExternalAudioStreamRequest_AudioStreamPrepare{
+									AudioStreamPrepare: &vectorpb.ExternalAudioStreamPrepare{
+										AudioFrameRate: 8000,
+										AudioVolume:    100,
+									},
+								},
+							})
+							llmHandler.sendMu.Unlock()
+							if err != nil {
+								logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] ⚠️  Health check: Failed to resend AudioStreamPrepare: %v (removing invalid client from pool)", err))
+								// Remove invalid client from pool
+								RemoveAudioClient(esn)
+							} else {
+								logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] ✅ Health check: AudioStreamPrepare resent successfully (audio should resume playing even though previous sends were successful)"))
+								// Small delay after resending Prepare
+								time.Sleep(100 * time.Millisecond)
+							}
+
+							// Reset counter
+							llmHandler.mu.Lock()
+							llmHandler.lastHealthCheck = time.Now()
+							llmHandler.chunksSentSinceLastCheck = 0
+							llmHandler.mu.Unlock()
+						} else {
+							// Normal operation - just update counters
+							// Log health check status every 10 seconds for monitoring
+							if timeSinceLastCheck > 10*time.Second {
+								logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] 🏥 Health check: Normal operation - total chunks: %d, chunks since last check: %d, time: %v", chunkCount, chunksSentSinceLastCheck, timeSinceLastCheck))
+							}
+							llmHandler.mu.Lock()
+							llmHandler.lastHealthCheck = time.Now()
+							llmHandler.chunksSentSinceLastCheck = 0 // Reset counter for next check
+							llmHandler.mu.Unlock()
+						}
+					case <-llmHandler.healthCheckStop:
 						return
 					}
 				}
@@ -1237,10 +1480,58 @@ func StreamingXiaozhiKG(esn string, transcribedText string, isKG bool, isConvers
 	// Server may send llm/tts messages immediately after receiving text query
 	// Handler must be ready to receive these messages
 	if deviceID != "" {
+		logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | 🔍 Registering LLM handler for deviceID: %s (connection should exist from STT)", esn, deviceID))
+
 		// Register handler with audio already setup
 		llmHandler.SetActive(true)
 		xiaozhi.SetLLMHandler(deviceID, llmHandler)
-		logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ✅ LLM handler registered BEFORE text query (audio ready: %v)", esn, vclient != nil && audioPrepareSent))
+		logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ✅ SetLLMHandler called for deviceID: %s", esn, deviceID))
+
+		// CRITICAL: Verify handler was set correctly with retry
+		// Sometimes connection manager needs a moment to update
+		maxRetries := 5
+		handlerVerified := false
+		for i := 0; i < maxRetries; i++ {
+			verifyHandler := xiaozhi.GetLLMHandler(deviceID)
+			if verifyHandler != nil && verifyHandler.IsActive() {
+				handlerVerified = true
+				logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ✅ LLM handler registered and VERIFIED active BEFORE text query (audio ready: %v, retry: %d/%d)", esn, vclient != nil && audioPrepareSent, i+1, maxRetries))
+				break
+			}
+			logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ⚠️  Handler verification failed (retry %d/%d): handler=%v, active=%v", esn, i+1, maxRetries, verifyHandler != nil, verifyHandler != nil && verifyHandler.IsActive()))
+			if i < maxRetries-1 {
+				// Wait a bit and retry
+				time.Sleep(20 * time.Millisecond)
+				// Try to set again
+				llmHandler.SetActive(true)
+				xiaozhi.SetLLMHandler(deviceID, llmHandler)
+				logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | 🔄 Retrying SetLLMHandler (retry %d/%d)", esn, i+1, maxRetries))
+			}
+		}
+
+		if !handlerVerified {
+			logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ⚠️  WARNING - LLM handler NOT verified after %d retries! This may cause llm/tts messages to be ignored!", esn, maxRetries))
+			// Last attempt: force activate
+			verifyHandler := xiaozhi.GetLLMHandler(deviceID)
+			if verifyHandler != nil {
+				verifyHandler.SetActive(true)
+				logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ✅ LLM handler force-activated as last resort", esn))
+			} else {
+				logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ❌ ERROR - LLM handler is nil! Connection may not exist in manager for deviceID: %s", esn, deviceID))
+				// CRITICAL: If handler is nil, connection doesn't exist - cannot proceed
+				// This should not happen if connection was reused from STT
+				return "", fmt.Errorf("LLM handler is nil - connection may not exist in manager for deviceID: %s", deviceID)
+			}
+		}
+
+		// CRITICAL: Small delay after handler verification to ensure connection manager has fully updated
+		// This prevents race condition where text query is sent before handler is fully registered
+		if handlerVerified {
+			time.Sleep(50 * time.Millisecond)
+			logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ✅ Handler verified, waiting 50ms for connection manager to fully update before sending text query", esn))
+		}
+	} else {
+		logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ⚠️  WARNING - deviceID is empty, cannot register LLM handler! This will cause llm/tts messages to be ignored!", esn))
 	}
 
 	// Step 3: Send text query (giống botkct.py line 789 - gửi trực tiếp sau khi nhận STT, KHÔNG gửi listen start)
@@ -1312,6 +1603,11 @@ func StreamingXiaozhiKG(esn string, transcribedText string, isKG bool, isConvers
 	// Audio processing is now synchronous - handled directly in LLM handler when receiving Opus frames
 	// Setup DoNewRequest trigger after TTS stops (in a separate goroutine to avoid blocking)
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Println(fmt.Sprintf("[Xiaozhi KG] PANIC in DoNewRequest goroutine (recovered): %v", r))
+			}
+		}()
 		// IMPORTANT: KHÔNG cancel audio context hoặc stop audio queue khi timeout
 		// Chỉ cancel/stop khi TTS thực sự dừng (nhận được TTS stop event)
 		// Điều này đảm bảo audio playback không bị interrupt khi TTS dài
