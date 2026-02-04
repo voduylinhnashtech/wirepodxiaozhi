@@ -1111,7 +1111,8 @@ func StreamingXiaozhiKG(esn string, transcribedText string, isKG bool, isConvers
 						AudioRequestType: &vectorpb.ExternalAudioStreamRequest_AudioStreamPrepare{
 							AudioStreamPrepare: &vectorpb.ExternalAudioStreamPrepare{
 								AudioFrameRate: 8000,
-								AudioVolume:    100,
+								// Vector AudioVolume is 0-100; higher values may lead to silence on some builds.
+								AudioVolume: 100,
 							},
 						},
 					})

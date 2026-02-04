@@ -21,30 +21,29 @@ func int16sToBytes(data []int16) []byte {
 	return bytes
 }
 
-// resample24kTo8kSimple - Simple linear resampling from 24kHz to 8kHz (like Play Audio)
-// Uses linear interpolation similar to Play Audio JavaScript code
+// resample24kTo8kSimple - Downsample from 24kHz to 8kHz for Vector ExternalAudioStreamPlayback.
+//
+// Note: The original implementation used linear interpolation. For a fixed 24k→8k (ratio 3:1),
+// a simple box filter (average-of-3) acts as a lightweight low-pass and reduces aliasing/harshness
+// ("rè") compared to naive decimation.
 func resample24kTo8kSimple(input []byte) [][]byte {
 	int16s := bytesToInt16s(input)
-	// Resample from 24kHz to 8kHz (ratio = 1/3)
+	// Fixed ratio 24k→8k: every 3 input samples -> 1 output sample (with simple low-pass).
 	newLength := len(int16s) / 3
-	output := make([]int16, newLength)
-	
-	// Linear interpolation (like Play Audio)
-	for i := 0; i < newLength; i++ {
-		oldIndex := float64(i) * 3.0 // 24kHz index
-		index0 := int(oldIndex)
-		index1 := index0 + 1
-		if index1 >= len(int16s) {
-			index1 = len(int16s) - 1
-		}
-		fraction := oldIndex - float64(index0)
-		
-		// Linear interpolation
-		value := float64(int16s[index0])*(1.0-fraction) + float64(int16s[index1])*fraction
-		output[i] = int16(value)
+	if newLength <= 0 {
+		return nil
 	}
-	
-	outBytes := int16sToBytes(output)
+	output := make([]int16, newLength)
+	for i := 0; i < newLength; i++ {
+		base := i * 3
+		// Box filter: average 3 samples using int32 to avoid overflow.
+		sum := int32(int16s[base]) + int32(int16s[base+1]) + int32(int16s[base+2])
+		output[i] = int16(sum / 3)
+	}
+
+	// Apply a modest gain to compensate for perceived low volume, with clipping protection.
+	// Keep this conservative to avoid distortion.
+	outBytes := increaseVolume(int16sToBytes(output), 1.6)
 	var audioChunks [][]byte
 	// Chunk into 1024 bytes (like Play Audio)
 	// Don't pad with zeros - send exact size (padding zeros can cause audio issues)
