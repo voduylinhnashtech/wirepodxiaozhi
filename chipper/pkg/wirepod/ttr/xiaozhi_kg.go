@@ -1410,57 +1410,34 @@ func StreamingXiaozhiKG(esn string, transcribedText string, isKG bool, isConvers
 						esn := llmHandler.esn
 						llmHandler.mu.Unlock()
 
-						// Health check: Monitor audio playback status
-						// Even if chunks are sent successfully (log shows success), audio might not be playing on robot
-						// This is a preventive mechanism to ensure audio is actually playing
+						// Health check: DO NOT resend AudioStreamPrepare during active playback.
+						// In practice, resending Prepare mid-stream can reset Vector's audio pipeline and cause
+						// audible dropouts (chunks "missing") even when vclient.Send() returns success.
 						//
-						// Logic:
-						// - If we've sent many chunks (>30) and many chunks since last check (>15),
-						//   it means we're actively sending audio but might not be playing
-						// - Resend AudioStreamPrepare to restart audio pipeline
-						// - This helps recover from cases where gRPC sends succeed but robot doesn't play audio
+						// Safer logic:
+						// - Only consider a "recover" action if we've been completely stuck:
+						//   no chunks sent since last check AND no new audio frames for a long time.
+						// - Otherwise just reset counters.
 						timeSinceLastCheck := time.Since(lastHealthCheck)
-						if vclient != nil && chunkCount > 30 && chunksSentSinceLastCheck > 15 && timeSinceLastCheck > 2*time.Second {
-							// Many chunks sent but audio might not be playing - resend AudioStreamPrepare
-							logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] 🏥 Health check: Sent %d chunks since last check (total: %d, time: %v) - even though logs show success, resending AudioStreamPrepare to ensure audio is actually playing on robot", chunksSentSinceLastCheck, chunkCount, timeSinceLastCheck))
+						timeSinceLastFrame := time.Since(llmHandler.lastFrameTime)
 
-							// Resend AudioStreamPrepare
-							llmHandler.sendMu.Lock()
-							err := vclient.Send(&vectorpb.ExternalAudioStreamRequest{
-								AudioRequestType: &vectorpb.ExternalAudioStreamRequest_AudioStreamPrepare{
-									AudioStreamPrepare: &vectorpb.ExternalAudioStreamPrepare{
-										AudioFrameRate: 8000,
-										AudioVolume:    100,
-									},
-								},
-							})
-							llmHandler.sendMu.Unlock()
-							if err != nil {
-								logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] ⚠️  Health check: Failed to resend AudioStreamPrepare: %v (removing invalid client from pool)", err))
-								// Remove invalid client from pool
-								RemoveAudioClient(esn)
-							} else {
-								logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] ✅ Health check: AudioStreamPrepare resent successfully (audio should resume playing even though previous sends were successful)"))
-								// Small delay after resending Prepare
-								time.Sleep(100 * time.Millisecond)
-							}
+						shouldRecover := vclient != nil &&
+							chunkCount > 0 &&
+							chunksSentSinceLastCheck == 0 &&
+							timeSinceLastCheck > 6*time.Second &&
+							!llmHandler.lastFrameTime.IsZero() &&
+							timeSinceLastFrame > 6*time.Second
 
-							// Reset counter
-							llmHandler.mu.Lock()
-							llmHandler.lastHealthCheck = time.Now()
-							llmHandler.chunksSentSinceLastCheck = 0
-							llmHandler.mu.Unlock()
-						} else {
-							// Normal operation - just update counters
-							// Log health check status every 10 seconds for monitoring
-							if timeSinceLastCheck > 10*time.Second {
-								logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] 🏥 Health check: Normal operation - total chunks: %d, chunks since last check: %d, time: %v", chunkCount, chunksSentSinceLastCheck, timeSinceLastCheck))
-							}
-							llmHandler.mu.Lock()
-							llmHandler.lastHealthCheck = time.Now()
-							llmHandler.chunksSentSinceLastCheck = 0 // Reset counter for next check
-							llmHandler.mu.Unlock()
+						if shouldRecover {
+							logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] 🏥 Health check: stream appears stuck (no frames for %v, no chunks sent for %v, total chunks: %d). Not resending AudioStreamPrepare to avoid dropouts; will remove client so next request recreates stream.", timeSinceLastFrame, timeSinceLastCheck, chunkCount))
+							RemoveAudioClient(esn)
 						}
+
+						// Reset counters for next interval
+						llmHandler.mu.Lock()
+						llmHandler.lastHealthCheck = time.Now()
+						llmHandler.chunksSentSinceLastCheck = 0
+						llmHandler.mu.Unlock()
 					case <-llmHandler.healthCheckStop:
 						return
 					}
