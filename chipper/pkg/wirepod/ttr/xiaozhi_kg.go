@@ -1348,37 +1348,48 @@ func StreamingXiaozhiKG(esn string, transcribedText string, isKG bool, isConvers
 							continue
 						}
 
-						if len(accumulatedBuffer) >= vectorAudioChunkBytes && vclient != nil && time.Since(lastSendTime) > 50*time.Millisecond {
-							chunkToSend := accumulatedBuffer[:vectorAudioChunkBytes]
-							remaining := accumulatedBuffer[vectorAudioChunkBytes:]
-							// CRITICAL: Use sendMu to serialize vclient.Send() calls
-							llmHandler.sendMu.Lock()
-							err := vclient.Send(&vectorpb.ExternalAudioStreamRequest{
-								AudioRequestType: &vectorpb.ExternalAudioStreamRequest_AudioStreamChunk{
-									AudioStreamChunk: &vectorpb.ExternalAudioStreamChunk{
-										AudioChunkSizeBytes: uint32(len(chunkToSend)),
-										AudioChunkSamples:   chunkToSend,
+						// IMPORTANT: Do NOT stream chunks from the flush timer.
+						// We already stream chunks in the main audio-handler path (per incoming Opus frame).
+						// Having BOTH send paths causes jitter/bursts (even with sendMu serialization),
+						// which can sound like dropped chunks / choppy playback on the robot.
+						//
+						// Flush timer responsibilities:
+						// - Auto-send AudioStreamComplete when stream ends (no frames)
+						// - Flush leftover buffer (<1024 bytes) if frames stop before reaching a full chunk
+						if !ttsStopped && vclient != nil && len(accumulatedBuffer) > 0 && !lastFrameTime.IsZero() && timeSinceLastFrame > 500*time.Millisecond {
+							// Pad leftover to 1024 boundary and send it, then keep remaining (if any) for next tick.
+							finalBuf := padToMultiple(accumulatedBuffer, vectorAudioChunkBytes)
+							if len(finalBuf) >= vectorAudioChunkBytes && time.Since(lastSendTime) > 50*time.Millisecond {
+								chunkToSend := finalBuf[:vectorAudioChunkBytes]
+								remaining := finalBuf[vectorAudioChunkBytes:]
+								llmHandler.sendMu.Lock()
+								err := vclient.Send(&vectorpb.ExternalAudioStreamRequest{
+									AudioRequestType: &vectorpb.ExternalAudioStreamRequest_AudioStreamChunk{
+										AudioStreamChunk: &vectorpb.ExternalAudioStreamChunk{
+											AudioChunkSizeBytes: uint32(len(chunkToSend)),
+											AudioChunkSamples:   chunkToSend,
+										},
 									},
-								},
-							})
-							llmHandler.sendMu.Unlock()
-							if err != nil {
-								if strings.Contains(err.Error(), "EOF") || strings.Contains(err.Error(), "closed") {
-									logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] ⚠️  vclient stream closed (EOF/closed)"))
+								})
+								llmHandler.sendMu.Unlock()
+								if err != nil {
+									if strings.Contains(err.Error(), "EOF") || strings.Contains(err.Error(), "closed") {
+										logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] ⚠️  vclient stream closed (EOF/closed)"))
+										llmHandler.mu.Lock()
+										llmHandler.vclient = nil
+										llmHandler.mu.Unlock()
+										continue
+									}
+									logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] ⚠️  Error flushing leftover audio chunk: %v", err))
+								} else {
 									llmHandler.mu.Lock()
-									llmHandler.vclient = nil
+									llmHandler.chunkCount++
+									llmHandler.chunksSentSinceLastCheck++
+									llmHandler.accumulatedBuffer = remaining
+									llmHandler.lastSendTime = time.Now()
 									llmHandler.mu.Unlock()
-									continue
+									time.Sleep(60 * time.Millisecond)
 								}
-								logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] ⚠️  Error sending audio chunk: %v", err))
-							} else {
-								llmHandler.mu.Lock()
-								llmHandler.chunkCount++
-								llmHandler.chunksSentSinceLastCheck++
-								llmHandler.accumulatedBuffer = remaining
-								llmHandler.lastSendTime = time.Now()
-								llmHandler.mu.Unlock()
-								time.Sleep(time.Millisecond * 60)
 							}
 						}
 					case <-llmHandler.flushTimerStop:
