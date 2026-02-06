@@ -41,9 +41,9 @@ func resample24kTo8kSimple(input []byte) [][]byte {
 		output[i] = int16(sum / 3)
 	}
 
-	// Apply a modest gain to compensate for perceived low volume, with clipping protection.
-	// Keep this conservative to avoid distortion.
-	outBytes := increaseVolume(int16sToBytes(output), 1.6)
+	// Apply dynamic range compression + gain to increase volume without distortion.
+	// This makes audio louder while preserving clarity better than simple gain.
+	outBytes := compressAndBoost(int16sToBytes(output), 1.8)
 	var audioChunks [][]byte
 	// Chunk into 1024 bytes (like Play Audio)
 	// Don't pad with zeros - send exact size (padding zeros can cause audio issues)
@@ -110,6 +110,72 @@ func increaseVolume(data []byte, factor float64) []byte {
 			int16s[i] = math.MinInt16
 		} else {
 			int16s[i] = int16(scaled)
+		}
+	}
+
+	return int16sToBytes(int16s)
+}
+
+// compressAndBoost applies dynamic range compression + gain boost to increase volume
+// while preserving clarity. This is better than simple gain multiplication.
+// - Compression ratio: 2:1 (quieter parts boosted more than loud parts)
+// - Threshold: -12dB (compress signals above this)
+// - Makeup gain: applied after compression
+func compressAndBoost(data []byte, makeupGain float64) []byte {
+	int16s := bytesToInt16s(data)
+
+	// Find peak level for normalization
+	maxAbs := float64(0)
+	for _, sample := range int16s {
+		abs := math.Abs(float64(sample))
+		if abs > maxAbs {
+			maxAbs = abs
+		}
+	}
+
+	// If audio is too quiet, normalize first
+	normalizeFactor := 1.0
+	if maxAbs > 0 && maxAbs < 10000 { // If peak is below ~30% of max
+		normalizeFactor = 20000.0 / maxAbs // Normalize to ~60% of max
+		if normalizeFactor > 3.0 {
+			normalizeFactor = 3.0 // Cap normalization to avoid excessive boost
+		}
+	}
+
+	// Compression parameters
+	threshold := 0.3 * math.MaxInt16 // -12dB threshold
+	ratio := 2.0                     // 2:1 compression ratio
+
+	// Apply compression + normalization + makeup gain
+	for i := range int16s {
+		sample := float64(int16s[i])
+
+		// Normalize first
+		sample *= normalizeFactor
+
+		// Apply compression (soft knee)
+		absSample := math.Abs(sample)
+		if absSample > threshold {
+			// Compress above threshold
+			excess := absSample - threshold
+			compressedExcess := excess / ratio
+			if sample > 0 {
+				sample = threshold + compressedExcess
+			} else {
+				sample = -(threshold + compressedExcess)
+			}
+		}
+
+		// Apply makeup gain
+		sample *= makeupGain
+
+		// Clamp to prevent overflow
+		if sample > math.MaxInt16 {
+			int16s[i] = math.MaxInt16
+		} else if sample < math.MinInt16 {
+			int16s[i] = math.MinInt16
+		} else {
+			int16s[i] = int16(sample)
 		}
 	}
 

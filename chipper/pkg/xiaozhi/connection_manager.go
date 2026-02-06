@@ -207,27 +207,24 @@ func StartReader(deviceID string, conn *websocket.Conn, sessionID string) {
 				// Wait a bit for ping goroutine to stop before removing from map
 				time.Sleep(50 * time.Millisecond)
 
-				// Remove connection from manager
+				// CRITICAL: Remove connection from map IMMEDIATELY (not in goroutine with delay)
+				// This ensures STT can create new connection right away without race condition
 				// STT handler will create new connection when needed and reactivate handlers
-				go func(devID string) {
-					// Small delay to ensure all cleanup is done
-					time.Sleep(100 * time.Millisecond)
-					connManager.mu.Lock()
-					// Check if connection still exists before deleting
-					if _, exists := connManager.connections[devID]; exists {
-						// Keep handlers in case they need to be reactivated
-						// Only remove connection, handlers will be reused or replaced when new connection is created
-						delete(connManager.connections, devID)
-					}
-					connManager.mu.Unlock()
-					logger.Println(fmt.Sprintf("[ConnectionManager] Connection removed from manager for device %s (STT will create new connection when needed)", devID))
+				connManager.mu.Lock()
+				// Check if connection still exists before deleting
+				if _, exists := connManager.connections[deviceID]; exists {
+					// Keep handlers in case they need to be reactivated
+					// Only remove connection, handlers will be reused or replaced when new connection is created
+					delete(connManager.connections, deviceID)
+					logger.Println(fmt.Sprintf("[ConnectionManager] Connection removed from manager for device %s (STT will create new connection when needed)", deviceID))
+				}
+				connManager.mu.Unlock()
 
-					// CRITICAL: When websocket closes, audio client in pool may be invalid
-					// Remove audio client from pool to force recreation on next TTS
-					// Note: We need to get ESN from deviceID, but deviceID is MAC address
-					// For now, we'll let xiaozhi_kg.go handle this by checking robot connection validity
-					// (This is already implemented in the reuse logic)
-				}(deviceID)
+				// CRITICAL: When websocket closes, audio client in pool may be invalid
+				// Remove audio client from pool to force recreation on next TTS
+				// Note: We need to get ESN from deviceID, but deviceID is MAC address
+				// For now, we'll let xiaozhi_kg.go handle this by checking robot connection validity
+				// (This is already implemented in the reuse logic)
 				return
 			}
 
