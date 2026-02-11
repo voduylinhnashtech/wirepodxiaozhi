@@ -3,6 +3,7 @@ package xiaozhi
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"sync"
 	"time"
 
@@ -77,6 +78,13 @@ func StartReader(deviceID string, conn *websocket.Conn, sessionID string) {
 
 	logger.Println(fmt.Sprintf("[ConnectionManager] Starting single reader goroutine for device: %s (sessionID: %s)", deviceID, sessionID))
 
+	// Log close frames with code/reason (helps debug close 1005/no status)
+	conn.SetCloseHandler(func(code int, text string) error {
+		logger.Println(fmt.Sprintf("[ConnectionManager] 🔌 Close received for device %s (sessionID: %s): code=%d text=%q", deviceID, sessionID, code, text))
+		// Accept close; reader loop will observe ReadMessage error.
+		return nil
+	})
+
 	// Set PongHandler to automatically respond to server pings
 	// This is important to keep connection alive - server may send ping and expect pong
 	conn.SetPongHandler(func(appData string) error {
@@ -107,10 +115,11 @@ func StartReader(deviceID string, conn *websocket.Conn, sessionID string) {
 		}()
 
 		// Start ping ticker to keep connection alive (prevent server timeout)
-		// Use 1 second like go-xiaozhi-main to keep connection very active
-		// Send ping frequently to prevent server from closing idle connection
-		pingTicker := time.NewTicker(1 * time.Second)
+		// 1s is extremely noisy and can create unnecessary load; keepalive doesn't need to be that aggressive.
+		// If you need to debug ping/pong, set XIAOZHI_DEBUG_PING=1.
+		pingTicker := time.NewTicker(20 * time.Second)
 		defer pingTicker.Stop()
+		debugPing := os.Getenv("XIAOZHI_DEBUG_PING") == "1"
 
 		// Ping goroutine to keep connection alive
 		go func() {
@@ -135,7 +144,9 @@ func StartReader(deviceID string, conn *websocket.Conn, sessionID string) {
 						if err != nil {
 							logger.Println(fmt.Sprintf("[ConnectionManager] Failed to send ping to device %s: %v", deviceID, err))
 						} else {
-							logger.Println(fmt.Sprintf("[ConnectionManager] ✅ Ping sent to device %s to keep connection alive", deviceID))
+							if debugPing {
+								logger.Println(fmt.Sprintf("[ConnectionManager] ✅ Ping sent to device %s to keep connection alive", deviceID))
+							}
 						}
 					}
 				case <-connInfo.ReaderStop:
@@ -180,7 +191,12 @@ func StartReader(deviceID string, conn *websocket.Conn, sessionID string) {
 				// IMPORTANT: Don't deactivate handlers immediately - keep them for potential reactivation
 				// Only mark connection as invalid, but keep handlers in case connection is recreated
 				// This allows handlers to be reactivated when new connection is created
-				logger.Println(fmt.Sprintf("[ConnectionManager] Connection closed for device %s: %v", deviceID, err))
+				// Provide close code if available
+				if ce, ok := err.(*websocket.CloseError); ok {
+					logger.Println(fmt.Sprintf("[ConnectionManager] Connection closed for device %s: code=%d text=%q err=%v", deviceID, ce.Code, ce.Text, err))
+				} else {
+					logger.Println(fmt.Sprintf("[ConnectionManager] Connection closed for device %s: %v", deviceID, err))
+				}
 
 				// IMPORTANT: Mark connection as invalid IMMEDIATELY by setting Conn to nil
 				// This prevents STT handler from trying to reuse a closed connection
@@ -207,16 +223,15 @@ func StartReader(deviceID string, conn *websocket.Conn, sessionID string) {
 				// Wait a bit for ping goroutine to stop before removing from map
 				time.Sleep(50 * time.Millisecond)
 
-				// CRITICAL: Remove connection from map IMMEDIATELY (not in goroutine with delay)
-				// This ensures STT can create new connection right away without race condition
-				// STT handler will create new connection when needed and reactivate handlers
+				// Keep the entry (handlers/state) but mark Conn=nil so writers fail fast and
+				// the preconnect loop / next STT call can recreate the websocket quickly.
 				connManager.mu.Lock()
-				// Check if connection still exists before deleting
-				if _, exists := connManager.connections[deviceID]; exists {
-					// Keep handlers in case they need to be reactivated
-					// Only remove connection, handlers will be reused or replaced when new connection is created
-					delete(connManager.connections, deviceID)
-					logger.Println(fmt.Sprintf("[ConnectionManager] Connection removed from manager for device %s (STT will create new connection when needed)", deviceID))
+				if ci, exists := connManager.connections[deviceID]; exists && ci != nil {
+					ci.mu.Lock()
+					ci.Conn = nil
+					ci.ReaderRunning = false
+					ci.mu.Unlock()
+					logger.Println(fmt.Sprintf("[ConnectionManager] Connection marked invalid for device %s (Conn=nil, handlers preserved)", deviceID))
 				}
 				connManager.mu.Unlock()
 
@@ -228,73 +243,113 @@ func StartReader(deviceID string, conn *websocket.Conn, sessionID string) {
 				return
 			}
 
-			// Route message to appropriate handler (giống botkct.py - đơn giản, không cần "in use" flag)
-			// Priority: LLM handler (if active) > STT handler (if active)
-			// This matches botkct.py behavior: same connection, routing based on handler state
+			// Route message to appropriate handler.
+			//
+			// CRITICAL: We must route by message semantics, not only "active" flags.
+			// - BinaryMessage from server is TTS audio → MUST go to LLM handler.
+			// - TextMessage has "type": "tts"/"llm"/"goodbye" → LLM handler; "stt" → STT handler.
+			// If we route binary/audio to STT (common when STT stays active on empty transcript),
+			// Vector will receive no audio even though the websocket is alive.
 			connInfo.mu.RLock()
 			sttHandler := connInfo.STTHandler
 			llmHandler := connInfo.LLMHandler
 			connInfo.mu.RUnlock()
 
-			// Route to LLM handler if active (priority - LLM is processing response)
-			if llmHandler != nil && llmHandler.IsActive() {
+			// 1) BinaryMessage (TTS audio) → LLM handler
+			if messageType == websocket.BinaryMessage {
+				if llmHandler == nil {
+					logger.Println(fmt.Sprintf("[ConnectionManager] ⚠️  Binary audio received for device %s but no LLM handler is set (len=%d). Dropping audio.", deviceID, len(message)))
+					continue
+				}
+				if !llmHandler.IsActive() {
+					logger.Println(fmt.Sprintf("[ConnectionManager] ⚠️  Binary audio received for device %s but LLM handler inactive; activating to handle audio", deviceID))
+					llmHandler.SetActive(true)
+				}
 				if err := llmHandler.HandleMessage(messageType, message); err != nil {
-					logger.Println(fmt.Sprintf("[ConnectionManager] LLM handler error for device %s: %v", deviceID, err))
+					logger.Println(fmt.Sprintf("[ConnectionManager] LLM handler error (binary audio) for device %s: %v", deviceID, err))
 				}
 				continue
 			}
 
-			// Route to STT handler if active (fallback - STT is listening)
-			if sttHandler != nil && sttHandler.IsActive() {
-				if err := sttHandler.HandleMessage(messageType, message); err != nil {
-					logger.Println(fmt.Sprintf("[ConnectionManager] STT handler error for device %s: %v", deviceID, err))
-				}
-				continue
-			}
-
-			// No active handler - log and continue (message will be ignored)
-			// IMPORTANT: For TTS/LLM messages, try to activate handler if it exists but is inactive
-			// This handles the case where connection was recreated but handler wasn't activated
+			// 2) TextMessage → route by event type when possible
 			if messageType == websocket.TextMessage {
 				var event map[string]interface{}
 				if err := json.Unmarshal(message, &event); err == nil {
 					eventType, _ := event["type"].(string)
-					// If TTS/LLM message and no active handler, try to activate appropriate handler
-					if eventType == "tts" || eventType == "llm" {
-						connInfo.mu.RLock()
-						sttHandler := connInfo.STTHandler
-						llmHandler := connInfo.LLMHandler
-						connInfo.mu.RUnlock()
-
-						// Try LLM handler first (for llm/tts messages)
-						if llmHandler != nil && !llmHandler.IsActive() && (eventType == "llm" || eventType == "tts") {
-							logger.Println(fmt.Sprintf("[ConnectionManager] ⚠️  %s message received but LLM handler inactive for device %s, attempting to activate...", eventType, deviceID))
+					switch eventType {
+					case "tts", "llm", "goodbye":
+						if llmHandler == nil {
+							logger.Println(fmt.Sprintf("[ConnectionManager] ⚠️  %s event received for device %s but no LLM handler is set. Event=%v", eventType, deviceID, event))
+							continue
+						}
+						if !llmHandler.IsActive() {
+							logger.Println(fmt.Sprintf("[ConnectionManager] ⚠️  %s event received but LLM handler inactive for device %s; activating", eventType, deviceID))
 							llmHandler.SetActive(true)
-							// Try to handle the message now
-							if err := llmHandler.HandleMessage(messageType, message); err != nil {
-								logger.Println(fmt.Sprintf("[ConnectionManager] LLM handler error after activation for device %s: %v", deviceID, err))
-							} else {
-								logger.Println(fmt.Sprintf("[ConnectionManager] ✅ LLM handler activated and processed %s message for device %s", eventType, deviceID))
-							}
+						}
+						if err := llmHandler.HandleMessage(messageType, message); err != nil {
+							logger.Println(fmt.Sprintf("[ConnectionManager] LLM handler error (%s) for device %s: %v", eventType, deviceID, err))
+						}
+						continue
+					case "stt":
+						if sttHandler == nil {
+							logger.Println(fmt.Sprintf("[ConnectionManager] ⚠️  STT event received for device %s but no STT handler is set. Event=%v", deviceID, event))
 							continue
 						}
-
-						// Fallback to STT handler for TTS messages
-						if sttHandler != nil && !sttHandler.IsActive() && eventType == "tts" {
-							logger.Println(fmt.Sprintf("[ConnectionManager] ⚠️  TTS message received but STT handler inactive for device %s, attempting to activate...", deviceID))
+						if !sttHandler.IsActive() {
+							logger.Println(fmt.Sprintf("[ConnectionManager] ⚠️  STT event received but STT handler inactive for device %s; activating", deviceID))
 							sttHandler.SetActive(true)
-							// Try to handle the message now
-							if err := sttHandler.HandleMessage(messageType, message); err != nil {
-								logger.Println(fmt.Sprintf("[ConnectionManager] STT handler error after activation for device %s: %v", deviceID, err))
-							} else {
-								logger.Println(fmt.Sprintf("[ConnectionManager] ✅ STT handler activated and processed TTS message for device %s", deviceID))
-							}
-							continue
 						}
+						if err := sttHandler.HandleMessage(messageType, message); err != nil {
+							logger.Println(fmt.Sprintf("[ConnectionManager] STT handler error (stt) for device %s: %v", deviceID, err))
+						}
+						continue
+					case "error":
+						// Errors can be relevant to both sides; deliver to active handlers first, otherwise deliver to whichever exists.
+						delivered := false
+						if llmHandler != nil && llmHandler.IsActive() {
+							_ = llmHandler.HandleMessage(messageType, message)
+							delivered = true
+						}
+						if sttHandler != nil && sttHandler.IsActive() {
+							_ = sttHandler.HandleMessage(messageType, message)
+							delivered = true
+						}
+						if !delivered {
+							if llmHandler != nil {
+								_ = llmHandler.HandleMessage(messageType, message)
+								delivered = true
+							} else if sttHandler != nil {
+								_ = sttHandler.HandleMessage(messageType, message)
+								delivered = true
+							}
+						}
+						if !delivered {
+							logger.Println(fmt.Sprintf("[ConnectionManager] ⚠️  Error event received for device %s but no handlers exist. Event=%v", deviceID, event))
+						}
+						continue
+					default:
+						// Unknown event type: fall back to active-handler routing below, but log once for visibility.
+						logger.Println(fmt.Sprintf("[ConnectionManager] ℹ️  Unknown event type for device %s: %q (sttActive=%v, llmActive=%v)", deviceID, eventType, sttHandler != nil && sttHandler.IsActive(), llmHandler != nil && llmHandler.IsActive()))
 					}
-					logger.Println(fmt.Sprintf("[ConnectionManager] No active handler for device %s, ignoring message type: %s", deviceID, eventType))
+				} else {
+					logger.Println(fmt.Sprintf("[ConnectionManager] ⚠️  Failed to parse TextMessage JSON for device %s: %v (len=%d)", deviceID, err, len(message)))
 				}
 			}
+
+			// 3) Fallback: route to active handler (LLM first), otherwise drop with log.
+			if llmHandler != nil && llmHandler.IsActive() {
+				if err := llmHandler.HandleMessage(messageType, message); err != nil {
+					logger.Println(fmt.Sprintf("[ConnectionManager] LLM handler error (fallback) for device %s: %v", deviceID, err))
+				}
+				continue
+			}
+			if sttHandler != nil && sttHandler.IsActive() {
+				if err := sttHandler.HandleMessage(messageType, message); err != nil {
+					logger.Println(fmt.Sprintf("[ConnectionManager] STT handler error (fallback) for device %s: %v", deviceID, err))
+				}
+				continue
+			}
+			logger.Println(fmt.Sprintf("[ConnectionManager] ⚠️  Dropping message for device %s: no active handler (messageType=%d, len=%d)", deviceID, messageType, len(message)))
 		}
 	}()
 }

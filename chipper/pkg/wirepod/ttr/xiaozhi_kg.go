@@ -25,6 +25,11 @@ const (
 	// which sends 1024-byte PCM chunks with ~60ms pacing at 8kHz mono 16-bit.
 	// Using the same chunk size here improves reliability (some robots seem to ignore smaller chunks).
 	vectorAudioChunkBytes = 1024
+	// Prefer 16kHz for Vector ExternalAudioStreamPlayback.
+	// This matches the OpenAI TTS path in this repo and tends to be more reliable than 8kHz on some builds.
+	vectorAudioFrameRate = 16000
+	vectorAudioVolume    = 80
+	vectorChunkPace      = 25 * time.Millisecond
 )
 
 // AudioQueue manages audio playback serialization per robot
@@ -232,7 +237,7 @@ func (h *LLMHandler) HandleMessage(messageType int, message []byte) error {
 									break
 								}
 								sentFinal++
-								time.Sleep(time.Millisecond * 60)
+								time.Sleep(vectorChunkPace)
 							}
 							// Clear buffer after sending final padded chunks
 							h.mu.Lock()
@@ -269,7 +274,7 @@ func (h *LLMHandler) HandleMessage(messageType int, message []byte) error {
 										},
 									})
 									if err == nil {
-										time.Sleep(time.Millisecond * 60)
+										time.Sleep(vectorChunkPace)
 										break
 									}
 									if retry < maxRetries-1 {
@@ -429,45 +434,36 @@ func (h *LLMHandler) HandleMessage(messageType int, message []byte) error {
 			binary.LittleEndian.PutUint16(framePCMBytes[i*2:], uint16(pcmBuffer[i]))
 		}
 
-		// Resample 24kHz → 8kHz
-		downsampledChunks := resample24kTo8kSimple(framePCMBytes)
-		if len(downsampledChunks) == 0 {
+		// Downsample 24kHz → 16kHz (stream-friendly: no per-frame padding; chunking happens on accumulated buffer)
+		downsampledBytes := downsample24kTo16kLinear(framePCMBytes)
+		if len(downsampledBytes) == 0 {
 			if count <= 5 {
-				logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] ⚠️  Resample returned 0 chunks (frame #%d, PCM size: %d bytes) - input may be too small", count, len(framePCMBytes)))
+				logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] ⚠️  Downsample returned 0 bytes (frame #%d, PCM size: %d bytes)", count, len(framePCMBytes)))
 			}
 			return nil
 		}
 
-		// Log resample success for first few frames
+		// Log downsample success for first few frames
 		if count <= 5 {
-			totalDownsampled := 0
-			for _, chunk := range downsampledChunks {
-				totalDownsampled += len(chunk)
-			}
-			logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] ✅ Resampled: frame #%d → %d chunks, %d bytes total (24kHz→8kHz)", count, len(downsampledChunks), totalDownsampled))
+			logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] ✅ Downsampled: frame #%d → %d bytes total (24kHz→16kHz)", count, len(downsampledBytes)))
 		}
 
 		// Accumulate into buffer
-		for _, c := range downsampledChunks {
-			accumulatedBuffer = append(accumulatedBuffer, c...)
-		}
+		accumulatedBuffer = append(accumulatedBuffer, downsampledBytes...)
 
 		// Log buffer status for first few frames
 		if count <= 5 {
 			logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] 📦 Buffer after frame #%d: %d bytes accumulated", count, len(accumulatedBuffer)))
 		}
 
-		// Send audio chunks using the same pattern as Play Audio (Vector control beta)
-		// Play Audio logic (from /api-sdk/play_sound):
-		// 1. Chia file PCM thành chunks 1024 bytes
-		// 2. Gửi từng chunk với delay 60ms giữa các chunks
-		// 3. Format: AudioFrameRate: 8000, AudioVolume: 100
+		// Send audio chunks using the same chunk size (1024 bytes) but prefer 16kHz playback.
+		// This matches the OpenAI TTS path in this repo and tends to be more reliable than 8kHz on some builds.
 		//
 		// Code hiện tại áp dụng logic tương tự:
 		// - Chunk size ưu tiên: 1024 bytes (giống Play Audio)
 		// - Delay giữa chunks: 60ms (giống Play Audio)
-		// - AudioFrameRate: 8000 (giống Play Audio)
-		// - AudioVolume: 100 (giống Play Audio)
+		// - AudioFrameRate: 16000 (prefer 16kHz; matches OpenAI TTS path)
+		// - AudioVolume: 80 (avoid "send ok but silent" on some builds)
 		// - Gửi AudioStreamComplete khi xong (giống Play Audio)
 		//
 		// Khác biệt: Play Audio chia file trước, code này accumulate buffer real-time
@@ -638,7 +634,7 @@ func (h *LLMHandler) HandleMessage(messageType int, message []byte) error {
 					logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] ⏱️  First chunk sent (pipeline always warm), waiting 50ms for robot to start playback"))
 				}
 			} else {
-				time.Sleep(time.Millisecond * 60) // Normal delay for subsequent chunks
+				time.Sleep(vectorChunkPace) // Normal delay for subsequent chunks
 			}
 			// Re-lock for next iteration
 			h.mu.Lock()
@@ -808,6 +804,13 @@ func StreamingXiaozhiKG(esn string, transcribedText string, isKG bool, isConvers
 
 	logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ========== STARTING StreamingXiaozhiKG ==========", esn))
 	logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ESN: %s, TranscribedText: '%s', isKG: %v, isConversationMode: %v", esn, esn, transcribedText, isKG, isConversationMode))
+	if strings.TrimSpace(transcribedText) == "" {
+		// If STT returns an empty transcript, do NOT send an empty text query upstream.
+		// This causes the server to hang (no response) and can block subsequent STT/TTS turns
+		// even though the websocket session is still alive.
+		logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ⚠️  Empty transcript - skipping upstream text query (will not call LLM)", esn))
+		return "", fmt.Errorf("empty transcript")
+	}
 
 	// Get robot connection - try to create even if robot not in vars.BotInfo.Robots
 	// This allows audio playback for any robot that makes a request
@@ -1114,9 +1117,9 @@ func StreamingXiaozhiKG(esn string, transcribedText string, isKG bool, isConvers
 					err := vclient.Send(&vectorpb.ExternalAudioStreamRequest{
 						AudioRequestType: &vectorpb.ExternalAudioStreamRequest_AudioStreamPrepare{
 							AudioStreamPrepare: &vectorpb.ExternalAudioStreamPrepare{
-								AudioFrameRate: 8000,
+								AudioFrameRate: vectorAudioFrameRate,
 								// Vector AudioVolume is 0-100; higher values may lead to silence on some builds.
-								AudioVolume: 100,
+								AudioVolume: vectorAudioVolume,
 							},
 						},
 					})
@@ -1139,12 +1142,12 @@ func StreamingXiaozhiKG(esn string, transcribedText string, isKG bool, isConvers
 							// CRITICAL: When websocket reconnects, robot needs more time to process AudioStreamPrepare
 							// This is similar to creating a new client - robot's audio pipeline may need to be "reset"
 							// Use longer delay (similar to new client after reconnect) to ensure audio plays correctly
-							logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ✅ AudioStreamPrepare sent on reused client (8kHz, volume 100) - stream is valid, BUT websocket reconnected, using longer delay", esn))
+							logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ✅ AudioStreamPrepare sent on reused client (%dkHz, volume %d) - stream is valid, BUT websocket reconnected, using longer delay", esn, vectorAudioFrameRate/1000, vectorAudioVolume))
 							time.Sleep(time.Millisecond * 1200) // Longer delay when websocket reconnects (similar to new client)
 							logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ✅ Delay after AudioStreamPrepare completed (1200ms - websocket reconnected, robot needs time to process)", esn))
 						} else {
 							// Normal reuse - pipeline is warm, minimal delay needed
-							logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ✅ AudioStreamPrepare sent on reused client (8kHz, volume 100) - stream is valid, pipeline is warm", esn))
+							logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ✅ AudioStreamPrepare sent on reused client (%dkHz, volume %d) - stream is valid, pipeline is warm", esn, vectorAudioFrameRate/1000, vectorAudioVolume))
 							time.Sleep(time.Millisecond * 50) // Minimal delay - pipeline is warm, only need time for robot to process Prepare
 							logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ✅ Delay after AudioStreamPrepare completed (50ms - pipeline always warm, only robot processing time)", esn))
 						}
@@ -1175,8 +1178,8 @@ func StreamingXiaozhiKG(esn string, transcribedText string, isKG bool, isConvers
 				err = vclient.Send(&vectorpb.ExternalAudioStreamRequest{
 					AudioRequestType: &vectorpb.ExternalAudioStreamRequest_AudioStreamPrepare{
 						AudioStreamPrepare: &vectorpb.ExternalAudioStreamPrepare{
-							AudioFrameRate: 8000,
-							AudioVolume:    100,
+							AudioFrameRate: vectorAudioFrameRate,
+							AudioVolume:    vectorAudioVolume,
 						},
 					},
 				})
@@ -1185,7 +1188,7 @@ func StreamingXiaozhiKG(esn string, transcribedText string, isKG bool, isConvers
 					vclient = nil
 					audioPrepareSent = false
 				} else {
-					logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ✅ AudioStreamPrepare sent successfully (8kHz, volume 100)", esn))
+					logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ✅ AudioStreamPrepare sent successfully (%dkHz, volume %d)", esn, vectorAudioFrameRate/1000, vectorAudioVolume))
 					audioPrepareSent = true
 
 					// Delay needed for NEW client creation (whether first time or after reconnect)
@@ -1289,15 +1292,18 @@ func StreamingXiaozhiKG(esn string, transcribedText string, isKG bool, isConvers
 
 						// Auto-complete when:
 						// - We previously sent at least one chunk (chunkCount > 0)
-						// - We haven't received a new Opus frame for 2s
-						// - We also haven't sent any audio chunk for a short grace window (so we're not mid-send)
+						// - We haven't received a new Opus frame for a LONG time
+						// - We also haven't sent any audio chunk for a while (so we're not mid-send)
+						//
+						// NOTE: Using a short "no frames" window (e.g. 2s) can cut off long TTS mid-sentence
+						// if upstream has jitter/pauses between audio bursts. Prefer a longer idle window here.
 						if !ttsStopped &&
 							vclient != nil &&
 							chunkCount > 0 &&
 							!lastFrameTime.IsZero() &&
-							timeSinceLastFrame > 2*time.Second &&
+							timeSinceLastFrame > 12*time.Second &&
 							!lastSendTime.IsZero() &&
-							timeSinceLastSend > 700*time.Millisecond {
+							timeSinceLastSend > 3*time.Second {
 							logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] ⏰ No new audio frames for %v and no sends for %v (chunks: %d, frames: %d), auto-sending AudioStreamComplete", timeSinceLastFrame, timeSinceLastSend, chunkCount, audioChunkCount))
 							llmHandler.mu.Lock()
 							llmHandler.ttsStopped = true
@@ -1326,7 +1332,7 @@ func StreamingXiaozhiKG(esn string, transcribedText string, isKG bool, isConvers
 										break
 									}
 									sentFinal++
-									time.Sleep(time.Millisecond * 60)
+									time.Sleep(vectorChunkPace)
 								}
 								llmHandler.mu.Lock()
 								llmHandler.accumulatedBuffer = []byte{}

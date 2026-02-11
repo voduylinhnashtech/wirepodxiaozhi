@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -21,6 +22,170 @@ import (
 )
 
 var Name string = "xiaozhi"
+
+var preconnectOnce sync.Once
+
+func startPreconnectLoop() {
+	preconnectOnce.Do(func() {
+		go func() {
+			deviceID := xiaozhi.GetDeviceIDFromConfig()
+			clientID := xiaozhi.GetClientIDFromConfig()
+			if deviceID == "" || clientID == "" {
+				logger.Println("Xiaozhi STT: Preconnect skipped (missing Device-Id or Client-Id in config)")
+				return
+			}
+
+			baseURL, _, _ := xiaozhi.GetKnowledgeGraphConfig()
+			if baseURL == "" {
+				baseURL = "wss://api.tenclass.net/xiaozhi/v1/"
+			}
+
+			headers := http.Header{}
+			headers.Add("Protocol-Version", "1")
+			headers.Add("Device-Id", deviceID)
+			headers.Add("Client-Id", clientID)
+
+			backoff := 1 * time.Second
+			for {
+				// If a valid connection already exists, do nothing (keep it warm).
+				if c, sid, exists := xiaozhi.CheckConnectionExists(deviceID); exists && c != nil && c.RemoteAddr() != nil && xiaozhi.IsReaderRunning(deviceID) {
+					_ = sid
+					// Check frequently so we recover quickly after "connection reset by peer".
+					time.Sleep(2 * time.Second)
+					continue
+				}
+
+				logger.Println(fmt.Sprintf("Xiaozhi STT: 🔌 Preconnecting websocket to %s (device=%s)...", baseURL, deviceID))
+				ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+				conn, _, _, err := dialWebsocketWithTimeout(ctx, baseURL, headers)
+				cancel()
+				if err != nil {
+					logger.Println(fmt.Sprintf("Xiaozhi STT: ⚠️  Preconnect failed: %v (retry in %v)", err, backoff))
+					time.Sleep(backoff)
+					if backoff < 30*time.Second {
+						backoff *= 2
+					}
+					continue
+				}
+
+				// Hello handshake (no listen start yet; we just keep the session alive)
+				helloEvent := map[string]interface{}{
+					"type":      "hello",
+					"version":   1,
+					"transport": "websocket",
+					"features": map[string]interface{}{
+						"mcp": true,
+						"aec": true,
+					},
+					"language": "vi",
+					"audio_params": map[string]interface{}{
+						"format":         "opus",
+						"sample_rate":    16000,
+						"channels":       1,
+						"frame_duration": 60,
+					},
+				}
+				if err := conn.WriteJSON(helloEvent); err != nil {
+					logger.Println(fmt.Sprintf("Xiaozhi STT: ⚠️  Preconnect hello write failed: %v", err))
+					conn.Close()
+					time.Sleep(backoff)
+					continue
+				}
+				var helloResp map[string]interface{}
+				if err := conn.ReadJSON(&helloResp); err != nil {
+					logger.Println(fmt.Sprintf("Xiaozhi STT: ⚠️  Preconnect hello read failed: %v", err))
+					conn.Close()
+					time.Sleep(backoff)
+					continue
+				}
+
+				sessionID := ""
+				if sid, ok := helloResp["session_id"].(string); ok && sid != "" {
+					sessionID = sid
+				}
+				if err := xiaozhi.StoreConnection(deviceID, conn, sessionID); err != nil {
+					logger.Println(fmt.Sprintf("Xiaozhi STT: ⚠️  Preconnect store connection failed: %v", err))
+					conn.Close()
+					time.Sleep(backoff)
+					continue
+				}
+
+				logger.Println(fmt.Sprintf("Xiaozhi STT: ✅ Preconnected websocket ready (sessionID=%s)", sessionID))
+				backoff = 1 * time.Second
+				time.Sleep(2 * time.Second)
+			}
+		}()
+	})
+}
+
+func dialWebsocketWithTimeout(parent context.Context, url string, headers http.Header) (*websocket.Conn, *http.Response, time.Duration, error) {
+	// Use a bounded timeout specifically for the websocket handshake.
+	// Without this, DialContext can appear to "hang" for a long time (DNS/TCP/TLS/handshake).
+	//
+	// Also retry a few times: upstream can be flaky and intermittent TCP/TLS stalls happen.
+	retries := 3
+	perAttemptTimeout := 12 * time.Second
+	handshakeTimeout := 10 * time.Second
+	backoff := 500 * time.Millisecond
+
+	var lastErr error
+	var lastResp *http.Response
+	var totalStart = time.Now()
+
+	for attempt := 1; attempt <= retries; attempt++ {
+		// Respect parent cancellation
+		select {
+		case <-parent.Done():
+			return nil, nil, time.Since(totalStart), fmt.Errorf("dial canceled: %w", parent.Err())
+		default:
+		}
+
+		dialCtx, cancel := context.WithTimeout(parent, perAttemptTimeout)
+		d := *websocket.DefaultDialer
+		d.HandshakeTimeout = handshakeTimeout
+		d.NetDialContext = (&net.Dialer{
+			Timeout:   handshakeTimeout,
+			KeepAlive: 30 * time.Second,
+		}).DialContext
+
+		start := time.Now()
+		conn, resp, err := d.DialContext(dialCtx, url, headers)
+		dur := time.Since(start)
+		cancel()
+
+		if err == nil {
+			return conn, resp, time.Since(totalStart), nil
+		}
+
+		lastErr = err
+		lastResp = resp
+
+		// If we got an HTTP response, log status/body (helps when server rejects handshake).
+		if resp != nil && resp.Body != nil {
+			b, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+			_ = resp.Body.Close()
+			logger.Println(fmt.Sprintf("Xiaozhi STT: WebSocket handshake failed (attempt=%d/%d, status=%s, body=%q, dur=%v)", attempt, retries, resp.Status, string(b), dur))
+		} else {
+			logger.Println(fmt.Sprintf("Xiaozhi STT: WebSocket dial failed (attempt=%d/%d, dur=%v): %v", attempt, retries, dur, err))
+		}
+
+		// Retry only on timeouts / transient network errors.
+		ne, ok := err.(net.Error)
+		shouldRetry := ok && ne.Timeout()
+		if dialCtx.Err() == context.DeadlineExceeded {
+			shouldRetry = true
+		}
+		if attempt < retries && shouldRetry {
+			time.Sleep(backoff)
+			backoff *= 2
+			continue
+		}
+
+		break
+	}
+
+	return nil, lastResp, time.Since(totalStart), lastErr
+}
 
 // STTHandler implements MessageHandler interface for STT
 // This handler processes STT-related messages from the single reader goroutine
@@ -86,7 +251,8 @@ func (h *STTHandler) HandleMessage(messageType int, message []byte) error {
 					// 1. Audio không đủ rõ để transcribe
 					// 2. Server không nhận đủ audio data
 					// 3. Audio quá ngắn hoặc chỉ có noise
-					logger.Println(fmt.Sprintf("Xiaozhi STT Handler: ⚠️  Received empty transcript from server (stt event with empty text) - server may not have received enough audio or audio was unclear"))
+					// Log full event JSON for debugging (this is high-signal when STT keeps returning empty)
+					logger.Println(fmt.Sprintf("Xiaozhi STT Handler: ⚠️  Received empty transcript from server (stt event with empty text). Raw event: %s", string(message)))
 					func() {
 						defer func() {
 							if r := recover(); r != nil {
@@ -164,6 +330,8 @@ func Init() error {
 		return fmt.Errorf("xiaozhi not configured as knowledge provider")
 	}
 	logger.Println("Xiaozhi STT initialized!")
+	// Keep a warm websocket session ready so opening the mic doesn't block on Dial/Hello.
+	startPreconnectLoop()
 	return nil
 }
 
@@ -224,82 +392,25 @@ func STT(sreq sr.SpeechRequest) (string, error) {
 	// Nếu device đã activate, server có thể yêu cầu token trong header
 
 	// Bước 0: Kiểm tra xem có connection cũ có thể reuse không
-	// CHỈ reuse nếu connection không đang được LLM sử dụng
+	// REUSE FIRST (go-xiaozhi-main style): if websocket is still alive, always reuse it for STT.
+	// If it's not alive, create a new one.
 	var conn *websocket.Conn
 	var sessionID string
 	var connReused bool
 
 	if deviceID != "" {
-		// First check if connection exists and is valid (regardless of in-use status)
-		// This is important: we need to know if connection exists even if it's "in use"
-		storedConn, storedSessionID, connectionExists := xiaozhi.CheckConnectionExists(deviceID)
-		connectionValid := connectionExists && storedConn != nil && storedConn.RemoteAddr() != nil && xiaozhi.IsReaderRunning(deviceID)
+		storedConn, storedSessionID, exists := xiaozhi.CheckConnectionExists(deviceID)
+		connectionValid := exists && storedConn != nil && storedConn.RemoteAddr() != nil && xiaozhi.IsReaderRunning(deviceID)
 
-		// SIMPLIFIED: No need to wait for "in use" (giống botkct.py - connection luôn available)
-		// Connection can be used immediately if valid, routing handles which handler gets messages
-		// Only check if connection is valid, not if it's "in use"
 		if connectionValid {
-			// Connection exists and is valid - can use immediately
-			// No need to wait for "release" - connection is always available (giống botkct.py)
-			safeLog("Xiaozhi STT: ✅ Connection for device %s is valid and available (giống botkct.py - no 'in use' concept)", deviceID)
-		}
-
-		// Re-check connection after waiting (it might have been closed)
-		// Use CheckConnectionExists to check if connection still exists (regardless of in-use status)
-		if connectionValid {
-			storedConn, storedSessionID, connectionExists = xiaozhi.CheckConnectionExists(deviceID)
-			connectionValid = connectionExists && storedConn != nil && storedConn.RemoteAddr() != nil && xiaozhi.IsReaderRunning(deviceID)
-		}
-
-		// Check if connection exists and can be reused (not in use)
-		if connectionValid {
-			safeLog("Xiaozhi STT: 🔍 Found existing connection for device %s (sessionID: %s), verifying validity...", deviceID, storedSessionID)
-
-			// First check if reader goroutine is still running
-			// If reader is not running, connection has likely failed
-			if !xiaozhi.IsReaderRunning(deviceID) {
-				logger.Println(fmt.Sprintf("Xiaozhi STT: ⚠️  Connection reader goroutine is not running, connection may have failed, creating new connection"))
-				xiaozhi.CloseConnection(deviceID)
-			} else if storedConn.RemoteAddr() != nil {
-				// Reader is running, verify connection is still valid
-				// Try to ping the connection to verify it's still alive
-				// Set a short write deadline to test connection
-				storedConn.SetWriteDeadline(time.Now().Add(1 * time.Second))
-				pingErr := storedConn.WriteMessage(websocket.PingMessage, nil)
-				storedConn.SetWriteDeadline(time.Time{}) // Clear deadline immediately
-
-				if pingErr != nil {
-					logger.Println(fmt.Sprintf("Xiaozhi STT: ⚠️  Reused connection failed ping test: %v, creating new connection", pingErr))
-					// Connection is dead, remove it and create new one
-					xiaozhi.CloseConnection(deviceID)
-				} else {
-					// Ping passed - connection is valid
-					// IMPORTANT: Don't read from connection here - ConnectionManager is already reading from it
-					// Reading from connection while ConnectionManager is also reading causes "repeated read on failed" panic
-					// Just verify RemoteAddr is still valid (connection not closed)
-					if storedConn.RemoteAddr() != nil {
-						// Double-check reader is still running after ping
-						if xiaozhi.IsReaderRunning(deviceID) {
-							// Connection is valid and reader is running, reuse it
-							conn = storedConn
-							sessionID = storedSessionID
-							connReused = true
-							logger.Println(fmt.Sprintf("Xiaozhi STT: ✅ REUSING existing connection for device %s (sessionID: %s) - session kept alive for continuous conversation", deviceID, sessionID))
-						} else {
-							logger.Println(fmt.Sprintf("Xiaozhi STT: ⚠️  Reader goroutine stopped during ping test, connection may have failed, creating new connection"))
-							xiaozhi.CloseConnection(deviceID)
-						}
-					} else {
-						logger.Println(fmt.Sprintf("Xiaozhi STT: ⚠️  Reused connection became invalid after ping (RemoteAddr is nil), creating new connection"))
-						xiaozhi.CloseConnection(deviceID)
-					}
-				}
-			} else {
-				logger.Println(fmt.Sprintf("Xiaozhi STT: ⚠️  Reused connection is invalid (RemoteAddr is nil), creating new connection"))
-				xiaozhi.CloseConnection(deviceID)
-			}
+			// go-xiaozhi-main behavior: if connection is alive, reuse it directly (no ping test).
+			conn = storedConn
+			sessionID = storedSessionID
+			connReused = true
+			logger.Println(fmt.Sprintf("Xiaozhi STT: ✅ REUSING existing connection for device %s (sessionID: %s) - websocket still alive", deviceID, sessionID))
 		} else {
-			logger.Println(fmt.Sprintf("Xiaozhi STT: ℹ️  No existing connection found for device %s, will create new connection", deviceID))
+			logger.Println(fmt.Sprintf("Xiaozhi STT: ℹ️  No valid existing connection for device %s (exists=%v, remoteAddr=%v, readerRunning=%v) - will create new connection",
+				deviceID, exists, storedConn != nil && storedConn.RemoteAddr() != nil, xiaozhi.IsReaderRunning(deviceID)))
 		}
 	}
 
@@ -322,14 +433,21 @@ func STT(sreq sr.SpeechRequest) (string, error) {
 		}
 
 		var err error
-		conn, _, err = websocket.DefaultDialer.DialContext(ctx, baseURL, headers)
+		var resp *http.Response
+		var dur time.Duration
+		safeLog("Xiaozhi STT: Dialing websocket (timeout=12s, handshakeTimeout=10s)...")
+		conn, resp, dur, err = dialWebsocketWithTimeout(ctx, baseURL, headers)
 		if err != nil {
 			// Check if error is due to context cancellation
 			if ctx.Err() != nil {
 				safeLog("Xiaozhi STT: ⚠️  Context canceled during connection: %v", ctx.Err())
 				return "", fmt.Errorf("context canceled during connection: %w", ctx.Err())
 			}
-			safeLog("Xiaozhi STT: Failed to connect: %v", err)
+			if resp != nil {
+				safeLog("Xiaozhi STT: Failed to connect after %v (handshake status=%s): %v", dur, resp.Status, err)
+			} else {
+				safeLog("Xiaozhi STT: Failed to connect after %v: %v", dur, err)
+			}
 			return "", fmt.Errorf("failed to connect to xiaozhi: %w", err)
 		}
 		safeLog("Xiaozhi STT: ✅ New WebSocket connection created")
@@ -355,8 +473,6 @@ func STT(sreq sr.SpeechRequest) (string, error) {
 		// Connection sẽ được đóng sau khi LLM xong hoặc sau timeout
 		// defer conn.Close() // REMOVED - để LLM có thể dùng lại connection
 	}
-	logger.Println("Xiaozhi STT: Hello event sent successfully")
-
 	// Step 1: Send hello event (chỉ nếu tạo connection mới, không cần nếu reuse)
 	if !connReused {
 		// Python client gửi: type, version, transport, audio_params, features, language
@@ -416,29 +532,6 @@ func STT(sreq sr.SpeechRequest) (string, error) {
 		}
 	} else {
 		logger.Println(fmt.Sprintf("Xiaozhi STT: ✅ Reusing connection, skipping hello event (sessionID: %s)", sessionID))
-		// Verify connection is still valid before using it (ConnectionManager might have closed it)
-		if conn != nil && conn.RemoteAddr() == nil {
-			logger.Println(fmt.Sprintf("Xiaozhi STT: ⚠️  Reused connection became invalid (RemoteAddr is nil), will create new connection"))
-			xiaozhi.CloseConnection(deviceID)
-			connReused = false
-			conn = nil
-			sessionID = ""
-			// Fall through to create new connection below
-		} else if conn != nil {
-			// Try to ping the connection to verify it's still alive
-			conn.SetWriteDeadline(time.Now().Add(1 * time.Second))
-			if pingErr := conn.WriteMessage(websocket.PingMessage, nil); pingErr != nil {
-				logger.Println(fmt.Sprintf("Xiaozhi STT: ⚠️  Reused connection ping failed: %v, will create new connection", pingErr))
-				xiaozhi.CloseConnection(deviceID)
-				connReused = false
-				conn = nil
-				sessionID = ""
-				// Fall through to create new connection below
-			} else {
-				conn.SetWriteDeadline(time.Time{}) // Clear deadline
-				logger.Println(fmt.Sprintf("Xiaozhi STT: ✅ Reused connection ping successful, connection is still valid"))
-			}
-		}
 	}
 
 	// If connection became invalid after reuse check, create new one
@@ -456,17 +549,15 @@ func STT(sreq sr.SpeechRequest) (string, error) {
 	// Step 3: Send listen start event
 	// botkct.py: message = {"session_id": self.session_id, "type": "listen", "state": "start", "mode": "auto"}
 	// go-xiaozhi-main: message = {"type": "listen", "mode": "manual", "state": "start"} (KHÔNG có session_id)
-	// Áp dụng y chang go-xiaozhi-main: KHÔNG gửi session_id trong listen message
+	// Prefer including session_id when available (botkct.py does this and some servers require it on reused sessions).
 	listenStart := map[string]interface{}{
 		"type":  "listen",
 		"state": "start",
 		"mode":  "auto", // go-xiaozhi-main dùng "manual", nhưng botkct.py dùng "auto" - giữ "auto" vì phù hợp với Vector robot
 	}
-	// go-xiaozhi-main KHÔNG gửi session_id trong listen message, nhưng botkct.py có gửi
-	// Thử không gửi session_id để xem có khác biệt không
-	// if sessionID != "" {
-	// 	listenStart["session_id"] = sessionID
-	// }
+	if sessionID != "" {
+		listenStart["session_id"] = sessionID
+	}
 	// Verify connection is still valid before sending listen start
 	// ConnectionManager might have closed it between reuse check and now
 	if conn == nil || conn.RemoteAddr() == nil {
@@ -480,7 +571,7 @@ func STT(sreq sr.SpeechRequest) (string, error) {
 		// Create new connection inline (similar to retry logic below)
 		logger.Println(fmt.Sprintf("Xiaozhi STT: Creating new connection after reused connection became invalid"))
 		var err2 error
-		conn, _, err2 = websocket.DefaultDialer.DialContext(ctx, baseURL, headers)
+		conn, _, _, err2 = dialWebsocketWithTimeout(ctx, baseURL, headers)
 		if err2 != nil {
 			logger.Println("Xiaozhi STT: Failed to create new connection:", err2)
 			return "", fmt.Errorf("failed to create new connection after reused connection became invalid: %w", err2)
@@ -544,7 +635,7 @@ func STT(sreq sr.SpeechRequest) (string, error) {
 			// Create new connection
 			logger.Println(fmt.Sprintf("Xiaozhi STT: Creating new connection after reused connection failed"))
 			var err2 error
-			conn, _, err2 = websocket.DefaultDialer.DialContext(ctx, baseURL, headers)
+			conn, _, _, err2 = dialWebsocketWithTimeout(ctx, baseURL, headers)
 			if err2 != nil {
 				logger.Println("Xiaozhi STT: Failed to create new connection:", err2)
 				return "", fmt.Errorf("failed to create new connection after reused connection failed: %w", err2)
@@ -603,7 +694,13 @@ func STT(sreq sr.SpeechRequest) (string, error) {
 	}
 
 	// Step 4: Setup STT handler and channels for async communication
-	done := make(chan bool)
+	done := make(chan struct{})
+	var doneOnce sync.Once
+	signalDone := func() {
+		doneOnce.Do(func() {
+			close(done)
+		})
+	}
 	transcriptChan := make(chan string, 10) // Increased buffer to 10 to handle long speech transcripts
 	errChan := make(chan error, 1)
 	errorOccurred := make(chan struct{}, 1)
@@ -691,30 +788,115 @@ func STT(sreq sr.SpeechRequest) (string, error) {
 			close(transcriptChan)
 			close(errChan)
 		}()
-		defer func() {
-			// Send listen stop when done
+
+		listenStopSent := false // Flag để đảm bảo chỉ gửi listen stop event một lần
+		sendListenStop := func(reason string) {
+			if listenStopSent {
+				return
+			}
 			listenStop := map[string]interface{}{
 				"type":  "listen",
 				"state": "stop",
 				"mode":  "auto",
 			}
-			// go-xiaozhi-main KHÔNG gửi session_id trong listen stop message
-			// IMPORTANT: After connection is stored, ALWAYS use helper function with writeMu
-			// to avoid concurrent write errors (ping goroutine is running)
-			if deviceID != "" {
-				// Connection is stored, use helper with writeMu
-				xiaozhi.WriteJSON(deviceID, listenStop)
-			} else {
-				// No deviceID, connection not stored - use direct write (shouldn't happen in normal flow)
-				conn.WriteJSON(listenStop)
+			if sessionID != "" {
+				listenStop["session_id"] = sessionID
 			}
-		}()
+			listenStopJSON, _ := json.Marshal(listenStop)
+			logger.Println(fmt.Sprintf("Xiaozhi STT: Sending listen stop (%s): %s", reason, string(listenStopJSON)))
+			// IMPORTANT: After connection is stored, ALWAYS use helper function with writeMu
+			if deviceID != "" {
+				_ = xiaozhi.WriteJSON(deviceID, listenStop)
+			} else if conn != nil {
+				_ = conn.WriteJSON(listenStop)
+			}
+			listenStopSent = true
+		}
+		defer sendListenStop("defer")
 
 		// Initialize VAD detection
 		sreq.DetectEndOfSpeech()
 
-		chunkCount := 0         // Đếm số chunks đã gửi để log
-		listenStopSent := false // Flag để đảm bảo chỉ gửi listen stop event một lần
+		reconnectAttempts := 0
+		reconnectAndRestartListen := func() error {
+			if deviceID == "" {
+				return fmt.Errorf("no deviceID; cannot reconnect via manager")
+			}
+			reconnectAttempts++
+			logger.Println(fmt.Sprintf("Xiaozhi STT: 🔁 Reconnecting websocket and restarting listen (attempt %d)...", reconnectAttempts))
+
+			// Ensure stale entry is removed.
+			xiaozhi.CloseConnection(deviceID)
+
+			newConn, _, dur, err := dialWebsocketWithTimeout(ctx, baseURL, headers)
+			if err != nil {
+				return fmt.Errorf("reconnect dial failed after %v: %w", dur, err)
+			}
+
+			// Hello handshake (same as initial connect)
+			helloEvent := map[string]interface{}{
+				"type":      "hello",
+				"version":   1,
+				"transport": "websocket",
+				"features": map[string]interface{}{
+					"mcp": true,
+					"aec": true,
+				},
+				"language": "vi",
+				"audio_params": map[string]interface{}{
+					"format":         "opus",
+					"sample_rate":    16000,
+					"channels":       1,
+					"frame_duration": 60,
+				},
+			}
+			if err := newConn.WriteJSON(helloEvent); err != nil {
+				newConn.Close()
+				return fmt.Errorf("reconnect hello write failed: %w", err)
+			}
+			var helloResp map[string]interface{}
+			if err := newConn.ReadJSON(&helloResp); err != nil {
+				newConn.Close()
+				return fmt.Errorf("reconnect hello read failed: %w", err)
+			}
+			if sid, ok := helloResp["session_id"].(string); ok && sid != "" {
+				sessionID = sid
+				logger.Println(fmt.Sprintf("Xiaozhi STT: ✅ Reconnect got new session_id: %s", sessionID))
+			} else {
+				logger.Println("Xiaozhi STT: ⚠️  Reconnect hello response missing session_id")
+			}
+
+			// Send listen start (include session_id when available)
+			listenStart := map[string]interface{}{
+				"type":  "listen",
+				"state": "start",
+				"mode":  "auto",
+			}
+			if sessionID != "" {
+				listenStart["session_id"] = sessionID
+			}
+			if err := newConn.WriteJSON(listenStart); err != nil {
+				newConn.Close()
+				return fmt.Errorf("reconnect listen start failed: %w", err)
+			}
+
+			// Store + re-register handler so routing/writes work.
+			if err := xiaozhi.StoreConnection(deviceID, newConn, sessionID); err != nil {
+				newConn.Close()
+				return fmt.Errorf("reconnect store connection failed: %w", err)
+			}
+			sttHandler.SetActive(true)
+			xiaozhi.SetSTTHandler(deviceID, sttHandler)
+
+			// Best-effort: update local conn handle for RemoteAddr checks.
+			conn = newConn
+			connReused = true
+
+			logger.Println("Xiaozhi STT: ✅ Reconnect complete; continuing to stream audio")
+			return nil
+		}
+
+		chunkCount := 0 // Đếm số chunks đã gửi để log
 
 		// KHÔNG gửi FirstReq (OpusHead/OpusTags) vì:
 		// 1. go-xiaozhi-main KHÔNG gửi OpusHead/OpusTags - chỉ gửi OPUS audio frames
@@ -771,32 +953,8 @@ func STT(sreq sr.SpeechRequest) (string, error) {
 				if err != nil {
 					if err == io.EOF {
 						logger.Println(fmt.Sprintf("Xiaozhi STT: End of audio stream (EOF) detected after %d chunks", chunkCount))
-						// Gửi listen stop event khi hết audio (theo go-xiaozhi-main - KHÔNG có session_id)
-						listenStop := map[string]interface{}{
-							"type":  "listen",
-							"state": "stop",
-							"mode":  "auto",
-						}
-						// go-xiaozhi-main KHÔNG gửi session_id trong listen stop message
-						listenStopJSON, _ := json.Marshal(listenStop)
-						logger.Println(fmt.Sprintf("Xiaozhi STT: Sending listen stop event after EOF: %s", string(listenStopJSON)))
-						// IMPORTANT: After connection is stored, ALWAYS use helper function with writeMu
-						// to avoid concurrent write errors (ping goroutine is running)
-						if deviceID != "" {
-							// Connection is stored, use helper with writeMu
-							xiaozhi.WriteJSON(deviceID, listenStop)
-						} else {
-							// No deviceID, connection not stored - use direct write (shouldn't happen in normal flow)
-							conn.WriteJSON(listenStop)
-						}
-						// Use select with default to avoid blocking if no receiver
-						select {
-						case done <- true:
-							// Signal sent successfully
-						default:
-							// No receiver, skip (channel might be closed or no receiver)
-							logger.Println("Xiaozhi STT: done channel has no receiver, skipping signal")
-						}
+						sendListenStop("EOF")
+						signalDone()
 						return
 					}
 					// Check if error is "context canceled" or "DeadlineExceeded" - this is not a real error, just user cancel or timeout
@@ -826,10 +984,7 @@ func STT(sreq sr.SpeechRequest) (string, error) {
 								// Vẫn không có audio sau retry, return empty transcript
 								logger.Println(fmt.Sprintf("Xiaozhi STT: ⚠️  Still no audio after retry, returning empty transcript"))
 								// Signal done to stop audio sending loop
-								select {
-								case done <- true:
-								default:
-								}
+								signalDone()
 								// Send empty transcript to transcriptChan (not error)
 								select {
 								case transcriptChan <- "":
@@ -841,10 +996,7 @@ func STT(sreq sr.SpeechRequest) (string, error) {
 						} else {
 							logger.Println(fmt.Sprintf("Xiaozhi STT: ⚠️  Context canceled while getting audio chunk (user cancel or timeout) - returning empty transcript, keeping connection"))
 							// Signal done to stop audio sending loop
-							select {
-							case done <- true:
-							default:
-							}
+							signalDone()
 							// Send empty transcript to transcriptChan (not error)
 							select {
 							case transcriptChan <- "":
@@ -854,10 +1006,7 @@ func STT(sreq sr.SpeechRequest) (string, error) {
 							return
 						}
 						// Signal done to stop audio sending loop
-						select {
-						case done <- true:
-						default:
-						}
+						signalDone()
 						// Send empty transcript to transcriptChan (not error)
 						select {
 						case transcriptChan <- "":
@@ -959,16 +1108,26 @@ func STT(sreq sr.SpeechRequest) (string, error) {
 							if n > 0 {
 								// Check connection validity before sending
 								if conn.RemoteAddr() == nil {
-									logger.Println(fmt.Sprintf("Xiaozhi STT: ⚠️  Connection is invalid (RemoteAddr is nil), stopping audio sending"))
-									select {
-									case connectionFailed <- true:
-									default:
+									logger.Println(fmt.Sprintf("Xiaozhi STT: ⚠️  Connection is invalid (RemoteAddr is nil) before sending OPUS frame"))
+									if deviceID != "" && reconnectAttempts < 2 {
+										if rerr := reconnectAndRestartListen(); rerr == nil {
+											// continue to send below (via WriteMessage)
+										} else {
+											logger.Println(fmt.Sprintf("Xiaozhi STT: ⚠️  Reconnect failed: %v", rerr))
+										}
 									}
-									select {
-									case errorOccurred <- struct{}{}:
-									default:
+									// If still invalid, stop.
+									if conn == nil || conn.RemoteAddr() == nil {
+										select {
+										case connectionFailed <- true:
+										default:
+										}
+										select {
+										case errorOccurred <- struct{}{}:
+										default:
+										}
+										return
 									}
-									return
 								}
 								// IMPORTANT: After connection is stored, ALWAYS use helper function with writeMu
 								// to avoid concurrent write errors (ping goroutine is running)
@@ -987,6 +1146,20 @@ func STT(sreq sr.SpeechRequest) (string, error) {
 									} else {
 										logger.Println(fmt.Sprintf("Xiaozhi STT: ERROR - Failed to send OPUS frame (%d bytes): %v", n, err))
 									}
+									// Attempt reconnect + retry once for common "session alive but conn dropped" failures.
+									if deviceID != "" && reconnectAttempts < 2 &&
+										(strings.Contains(err.Error(), "connection not found") || strings.Contains(err.Error(), "connection is closed") || strings.Contains(err.Error(), "close 1005")) {
+										if rerr := reconnectAndRestartListen(); rerr == nil {
+											if rerr2 := xiaozhi.WriteMessage(deviceID, websocket.BinaryMessage, opusFrame[:n]); rerr2 == nil {
+												continue
+											} else {
+												logger.Println(fmt.Sprintf("Xiaozhi STT: ⚠️  Retry send after reconnect failed: %v", rerr2))
+											}
+										} else {
+											logger.Println(fmt.Sprintf("Xiaozhi STT: ⚠️  Reconnect failed: %v", rerr))
+										}
+									}
+
 									// Mark connection as failed
 									select {
 									case connectionFailed <- true:
@@ -1044,6 +1217,20 @@ func STT(sreq sr.SpeechRequest) (string, error) {
 							} else {
 								logger.Println(fmt.Sprintf("Xiaozhi STT: ERROR - Failed to send audio chunk (%d bytes): %v", len(chunk), err))
 							}
+							// Attempt reconnect + retry once for common "session alive but conn dropped" failures.
+							if deviceID != "" && reconnectAttempts < 2 &&
+								(strings.Contains(err.Error(), "connection not found") || strings.Contains(err.Error(), "connection is closed") || strings.Contains(err.Error(), "close 1005")) {
+								if rerr := reconnectAndRestartListen(); rerr == nil {
+									if rerr2 := xiaozhi.WriteMessage(deviceID, websocket.BinaryMessage, chunk); rerr2 == nil {
+										continue
+									} else {
+										logger.Println(fmt.Sprintf("Xiaozhi STT: ⚠️  Retry send (raw chunk) after reconnect failed: %v", rerr2))
+									}
+								} else {
+									logger.Println(fmt.Sprintf("Xiaozhi STT: ⚠️  Reconnect failed: %v", rerr))
+								}
+							}
+
 							// Mark connection as failed
 							select {
 							case connectionFailed <- true:
@@ -1104,35 +1291,7 @@ func STT(sreq sr.SpeechRequest) (string, error) {
 
 					logger.Println(fmt.Sprintf("Xiaozhi STT: End of speech detected after %d chunks (user likely finished speaking). Audio was already streamed continuously (like botkct.py). Sending listen stop event...", chunkCount))
 
-					// Send listen stop event
-					// go-xiaozhi-main: message = {"type": "listen", "mode": "manual", "state": "stop"} (KHÔNG có session_id)
-					// Áp dụng y chang go-xiaozhi-main: KHÔNG gửi session_id trong listen stop message
-					listenStop := map[string]interface{}{
-						"type":  "listen",
-						"state": "stop",
-						"mode":  "auto", // Giữ mode giống listen start
-					}
-					// go-xiaozhi-main KHÔNG gửi session_id trong listen stop message
-					// if sessionID != "" {
-					// 	listenStop["session_id"] = sessionID
-					// }
-					// IMPORTANT: After connection is stored, ALWAYS use helper function with writeMu
-					// to avoid concurrent write errors (ping goroutine is running)
-					var err error
-					if deviceID != "" {
-						// Connection is stored, use helper with writeMu
-						err = xiaozhi.WriteJSON(deviceID, listenStop)
-					} else {
-						// No deviceID, connection not stored - use direct write (shouldn't happen in normal flow)
-						err = conn.WriteJSON(listenStop)
-					}
-					if err != nil {
-						logger.Println(fmt.Sprintf("Xiaozhi STT: ERROR - Failed to send listen stop: %v", err))
-						// Không return error ở đây, vì audio đã được gửi
-					} else {
-						logger.Println("Xiaozhi STT: Listen stop event sent successfully")
-						listenStopSent = true // Đánh dấu đã gửi để tránh gửi lại
-					}
+					sendListenStop("end_of_speech")
 
 					// Wait longer for server to process long speech (increased from 500ms to 2s)
 					// This gives server more time to process long audio and send transcript
@@ -1145,14 +1304,10 @@ func STT(sreq sr.SpeechRequest) (string, error) {
 
 					// Chỉ dừng gửi audio chunks, không return - STT reader sẽ tiếp tục đọc messages
 					// LLM reader sẽ đọc và xử lý LLM/TTS events từ connection này
-					// Use select with default to avoid blocking if no receiver
-					select {
-					case done <- true:
-						// Signal sent successfully
-					default:
-						// No receiver, skip (channel might be closed or no receiver)
-						logger.Println("Xiaozhi STT: done channel has no receiver, skipping signal")
-					}
+					// Stop audio sending immediately after listen stop to avoid sending frames after stop
+					// (this can cause upstream to return empty transcript).
+					signalDone()
+					return
 					// KHÔNG return ở đây - để STT reader tiếp tục đọc messages cho LLM reader
 					// Connection sẽ được đóng bởi LLM reader khi xong
 				}
