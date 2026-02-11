@@ -350,10 +350,14 @@ func (h *LLMHandler) HandleMessage(messageType int, message []byte) error {
 				sessionID = sid
 			}
 			logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] 👋 Received goodbye event (session_id: %s) - signaling TTS stop but keeping connection for reuse", sessionID))
-			// Signal TTS stop if not already signaled (this will trigger final buffer send)
-			select {
-			case h.ttsStopChan <- true:
-			default:
+			// Some servers end a TTS stream with "goodbye" instead of sending a final "tts" state:"stop".
+			// If we don't finalize (flush + AudioStreamComplete), Vector may buffer and never play anything.
+			h.mu.RLock()
+			alreadyStopped := h.ttsStopped
+			h.mu.RUnlock()
+			if !alreadyStopped {
+				// Trigger the same finalize logic as a normal TTS stop.
+				_ = h.HandleMessage(websocket.TextMessage, []byte(`{"type":"tts","state":"stop"}`))
 			}
 			// Don't close connection - let it be reused for next request (like ESP32)
 		}
@@ -1273,17 +1277,28 @@ func StreamingXiaozhiKG(esn string, transcribedText string, isKG bool, isConvers
 						llmHandler.mu.Unlock()
 
 						// Check if we should auto-send AudioStreamComplete
-						// If no new frames for 2 seconds and we have sent at least 1 chunk, send complete
+						// If no new frames for a while AND we are no longer sending audio chunks to the robot,
+						// send complete to unblock Vector playback and allow next turn.
+						//
+						// IMPORTANT: We must NOT key only off "no frames", because the websocket reader can be
+						// temporarily busy sending audio to the robot (gRPC + pacing sleeps). In that case, frames
+						// may be queued but not yet read; auto-completing would cut TTS mid-sentence.
 						// Also check if lastFrameTime is not zero (at least one frame was received)
 						timeSinceLastFrame := time.Since(lastFrameTime)
-						// Log debug info every 500ms to track timer activity
-						if timeSinceLastFrame > 500*time.Millisecond && !lastFrameTime.IsZero() && chunkCount > 0 && !ttsStopped {
-							if int(timeSinceLastFrame.Seconds()*2)%2 == 0 { // Log every ~500ms
-								logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] ⏱️  Flush timer active: lastFrame=%v ago, chunkCount=%d, ttsStopped=%v, vclient=%v", timeSinceLastFrame, chunkCount, ttsStopped, vclient != nil))
-							}
-						}
-						if !ttsStopped && vclient != nil && chunkCount > 0 && !lastFrameTime.IsZero() && timeSinceLastFrame > 2*time.Second {
-							logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] ⏰ No new audio frames for 2s (last frame: %v ago, chunkCount: %d, audioFrames: %d), auto-sending AudioStreamComplete", timeSinceLastFrame, chunkCount, audioChunkCount))
+						timeSinceLastSend := time.Since(lastSendTime)
+
+						// Auto-complete when:
+						// - We previously sent at least one chunk (chunkCount > 0)
+						// - We haven't received a new Opus frame for 2s
+						// - We also haven't sent any audio chunk for a short grace window (so we're not mid-send)
+						if !ttsStopped &&
+							vclient != nil &&
+							chunkCount > 0 &&
+							!lastFrameTime.IsZero() &&
+							timeSinceLastFrame > 2*time.Second &&
+							!lastSendTime.IsZero() &&
+							timeSinceLastSend > 700*time.Millisecond {
+							logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] ⏰ No new audio frames for %v and no sends for %v (chunks: %d, frames: %d), auto-sending AudioStreamComplete", timeSinceLastFrame, timeSinceLastSend, chunkCount, audioChunkCount))
 							llmHandler.mu.Lock()
 							llmHandler.ttsStopped = true
 							llmHandler.mu.Unlock()
