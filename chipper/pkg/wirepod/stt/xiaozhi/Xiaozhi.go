@@ -208,21 +208,6 @@ func STT(sreq sr.SpeechRequest) (string, error) {
 	if deviceID != "" {
 		headers.Add("Device-Id", deviceID)
 		logger.Println(fmt.Sprintf("Xiaozhi STT: Using Device-Id from config: %s", deviceID))
-
-		// Kiểm tra activation status từ server (không dùng local cache)
-		logger.Println(fmt.Sprintf("Xiaozhi STT: Checking device activation status from server for Device-Id: %s, Client-Id: %s", deviceID, clientID))
-		isActivated, statusMsg, err := xiaozhi.CheckDeviceActivationFromServer(deviceID, clientID)
-		if err != nil {
-			logger.Println(fmt.Sprintf("Xiaozhi STT: ⚠️  WARNING - Failed to check activation status from server: %v", err))
-		} else {
-			if isActivated {
-				logger.Println(fmt.Sprintf("Xiaozhi STT: ✅ Device-Id %s is ACTIVATED on server: %s", deviceID, statusMsg))
-			} else {
-				logger.Println(fmt.Sprintf("Xiaozhi STT: ❌ Device-Id %s is NOT ACTIVATED on server: %s", deviceID, statusMsg))
-				logger.Println(fmt.Sprintf("Xiaozhi STT: ⚠️  CRITICAL WARNING - Device must be activated before STT will work. This will cause 'Error occurred while processing message'."))
-				logger.Println(fmt.Sprintf("Xiaozhi STT: Please pair/activate device %s with Client-Id %s on the server first.", deviceID, clientID))
-			}
-		}
 	} else {
 		logger.Println("Xiaozhi STT: WARNING - No Device-Id configured. Server may reject the connection.")
 	}
@@ -552,7 +537,7 @@ func STT(sreq sr.SpeechRequest) (string, error) {
 		logger.Println(fmt.Sprintf("Xiaozhi STT: ERROR - Failed to send listen start: %v", err))
 		// If reusing connection and it fails, connection is invalid - remove it and create new one
 		if connReused && deviceID != "" {
-			logger.Println(fmt.Sprintf("Xiaozhi STT: ⚠️  Reused connection is invalid, removing from manager and creating new connection", deviceID))
+			logger.Println(fmt.Sprintf("Xiaozhi STT: ⚠️  Reused connection is invalid for device %s, removing from manager and creating new connection", deviceID))
 			xiaozhi.CloseConnection(deviceID) // Close and remove invalid connection
 			// Retry with new connection
 			connReused = false

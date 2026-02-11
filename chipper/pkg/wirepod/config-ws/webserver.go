@@ -1106,29 +1106,80 @@ func handleXiaozhiGeneratePairingCode(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Generate pairing code với Client-Id (LOCAL - không gửi lên server)
-	// Note: Pairing code được tạo local, không gửi request lên upstream server
-	fmt.Printf("[DEBUG] handleXiaozhiGeneratePairingCode: Generating pairing code locally (not sending to upstream server)\n")
+	// Mode selection:
+	// - default: if Knowledge provider is xiaozhi and upstream looks like api.tenclass.net, fetch activation code from upstream OTA endpoint
+	// - mode=local: force old behavior (generate locally)
+	mode := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("mode")))
+	forceLocal := mode == "local"
+
+	// If user configured upstream Xiaozhi (default), we must return upstream-issued activation code;
+	// otherwise the 6-digit code will be rejected by upstream pairing page.
+	upstreamLooksLikeTenclass := strings.Contains(xiaozhi.GetBaseURL(), "api.tenclass.net")
+	useUpstream := !forceLocal && vars.APIConfig.Knowledge.Provider == "xiaozhi" && upstreamLooksLikeTenclass
+
+	if useUpstream {
+		fmt.Printf("[DEBUG] handleXiaozhiGeneratePairingCode: Fetching activation code from upstream OTA endpoint (Device-Id=%s, Client-Id=%s)\n", deviceID, clientID)
+		// Activation-Version/Serial-Number:
+		// - default to version 1 (no serial required)
+		// - allow override via query params if user has burned serial and needs v2 flow
+		activationVersion := strings.TrimSpace(r.URL.Query().Get("activation_version"))
+		serialNumber := strings.TrimSpace(r.URL.Query().Get("serial_number"))
+		act, err := xiaozhi.FetchUpstreamActivationFromOTACheck(deviceID, clientID, activationVersion, serialNumber)
+		if err != nil {
+			fmt.Printf("[DEBUG] handleXiaozhiGeneratePairingCode: Upstream fetch failed: %v\n", err)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadGateway)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"error":     "Không lấy được pairing/activation code từ upstream Xiaozhi (api.tenclass.net). Hãy kiểm tra mạng/DNS hoặc firewall của server.",
+				"detail":    err.Error(),
+				"device_id": deviceID,
+				"client_id": clientID,
+				"mode":      "upstream",
+			})
+			return
+		}
+
+		expiresIn := 600
+		if act.TimeoutMS > 0 {
+			expiresIn = act.TimeoutMS / 1000
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"code":               act.Code,
+			"challenge":          act.Challenge,
+			"device_id":          deviceID,
+			"client_id":          clientID,
+			"expires_in":         expiresIn,
+			"note":               "Mã này được lấy từ upstream Xiaozhi (endpoint /xiaozhi/ota/). Hãy nhập đúng mã này trên trang pairing/activation của upstream.",
+			"message":            act.Message,
+			"mode":               "upstream",
+			"activation_version": activationVersion,
+		})
+		return
+	}
+
+	// Fallback/explicit local mode
+	fmt.Printf("[DEBUG] handleXiaozhiGeneratePairingCode: Generating pairing code locally (mode=%s)\n", mode)
 	code, challenge, err := xiaozhi.GeneratePairingCode(deviceID, clientID)
 	if err != nil {
 		fmt.Printf("[DEBUG] handleXiaozhiGeneratePairingCode: Failed to generate pairing code: %v\n", err)
 		http.Error(w, fmt.Sprintf("Failed to generate pairing code: %v", err), http.StatusInternalServerError)
 		return
 	}
-	fmt.Printf("[DEBUG] handleXiaozhiGeneratePairingCode: Successfully generated code='%s', challenge='%s' (first 20 chars)\n", code, challenge[:20])
+	fmt.Printf("[DEBUG] handleXiaozhiGeneratePairingCode: Successfully generated local code='%s', challenge='%s' (first 20 chars)\n", code, challenge[:20])
 
-	response := map[string]interface{}{
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"code":           code,
 		"challenge":      challenge,
 		"device_id":      deviceID,
-		"client_id":      clientID, // Client-Id (UUID) - giống ESP32
-		"expires_in":     600,      // 10 minutes in seconds
-		"note":           fmt.Sprintf("Pairing code chỉ dành cho máy này (MAC: %s). Chỉ thiết bị có MAC address này mới có thể pair.", deviceID),
-		"client_id_note": fmt.Sprintf("Client-Id (UUID): %s - Được tự động tạo và lưu vào config (giống ESP32)", clientID),
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+		"client_id":      clientID,
+		"expires_in":     600,
+		"note":           "Mã này được tạo LOCAL trên wirepodxiaozhi (mode=local). Nó sẽ KHÔNG hợp lệ nếu bạn nhập lên upstream api.tenclass.net.",
+		"client_id_note": fmt.Sprintf("Client-Id (UUID): %s", clientID),
+		"mode":           "local",
+	})
 }
 
 func handleXiaozhiValidatePairingCode(w http.ResponseWriter, r *http.Request) {
@@ -1457,8 +1508,14 @@ func handleXiaozhiGetConnectedDevices(w http.ResponseWriter, r *http.Request) {
 
 // handleXiaozhiCheckDeviceStatus kiểm tra xem device đã được activate/pair hay chưa
 func handleXiaozhiCheckDeviceStatus(w http.ResponseWriter, r *http.Request) {
-	// Log request info
-	fmt.Printf("[DEBUG] handleXiaozhiCheckDeviceStatus: Method=%s, URL=%s, Headers=%v\n", r.Method, r.URL.String(), r.Header)
+	// Disabled: avoid unnecessary upstream activation checks and log spam
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusGone)
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"disabled": true,
+		"message":  "xiaozhi_check_device_status is disabled",
+	})
+	return
 
 	deviceID := r.URL.Query().Get("device_id")
 	if deviceID == "" {

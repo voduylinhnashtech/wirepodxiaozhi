@@ -1,6 +1,7 @@
 package xiaozhi
 
 import (
+	"bytes"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -471,7 +472,7 @@ func GetLocalMACAddresses() []string {
 		if iface.Flags&net.FlagLoopback != 0 {
 			continue
 		}
-		if iface.HardwareAddr == nil || len(iface.HardwareAddr) == 0 {
+		if len(iface.HardwareAddr) == 0 {
 			continue
 		}
 
@@ -496,7 +497,7 @@ func GetPrimaryMACAddress() string {
 		if iface.Flags&net.FlagLoopback != 0 {
 			continue
 		}
-		if iface.HardwareAddr == nil || len(iface.HardwareAddr) == 0 {
+		if len(iface.HardwareAddr) == 0 {
 			continue
 		}
 
@@ -511,7 +512,7 @@ func GetPrimaryMACAddress() string {
 		if iface.Flags&net.FlagLoopback != 0 {
 			continue
 		}
-		if iface.HardwareAddr != nil && len(iface.HardwareAddr) > 0 {
+		if len(iface.HardwareAddr) > 0 {
 			return iface.HardwareAddr.String()
 		}
 	}
@@ -681,12 +682,11 @@ func CheckDeviceActivationFromServer(deviceID string, clientID ...string) (bool,
 			return true, "Device is activated (server response contains activation keywords)", nil
 		}
 
-		// 2. if isinstance(data, dict):
-		//    status = str(data.get("status", "")).lower()
-		//    if status in ["ok", "success", "verified", "activated"]: return True
+		// 2. status field (NOTE: upstream may return {"status":"ok"} for "server healthy" which does NOT mean activated)
+		// We only treat explicit activation-like statuses as activated.
 		if status, ok := result["status"].(string); ok {
 			statusLower := strings.ToLower(status)
-			if statusLower == "ok" || statusLower == "success" || statusLower == "verified" || statusLower == "activated" {
+			if statusLower == "success" || statusLower == "verified" || statusLower == "activated" {
 				fmt.Printf("[DEBUG] CheckDeviceActivationFromServer: Status field='%s' -> Device is activated (giống botkct.py)\n", status)
 				return true, fmt.Sprintf("Device is activated (status: %s)", status), nil
 			}
@@ -710,4 +710,123 @@ func CheckDeviceActivationFromServer(deviceID string, clientID ...string) (bool,
 	// Nếu tất cả endpoints đều fail, trả về lỗi
 	fmt.Printf("[DEBUG] CheckDeviceActivationFromServer: All endpoints failed, last error: %v\n", lastErr)
 	return false, "", fmt.Errorf("failed to check device status from server: %w", lastErr)
+}
+
+// UpstreamActivation represents the activation (pairing) info returned by upstream OTA endpoint.
+// This matches what xiaozhi-esp32 expects (activation.code + activation.challenge).
+type UpstreamActivation struct {
+	Code      string
+	Challenge string
+	Message   string
+	TimeoutMS int
+	Raw       map[string]interface{}
+}
+
+// FetchUpstreamActivationFromOTACheck calls upstream `.../xiaozhi/ota/` and returns activation info (code/challenge).
+// IMPORTANT: Upstream behavior differs by Activation-Version:
+// - "1": typically does NOT require Serial-Number (safer default for devices without burned serial).
+// - "2": may require Serial-Number (some pairing flows will fail with SERIAL_NUMBER_REQUIRED).
+func FetchUpstreamActivationFromOTACheck(deviceID, clientID, activationVersion, serialNumber string) (*UpstreamActivation, error) {
+	// Validate Device-Id format before calling upstream
+	if !ValidateDeviceIDFormat(deviceID) {
+		return nil, fmt.Errorf("invalid Device-Id format: %s", deviceID)
+	}
+
+	baseURL := GetBaseURL()
+	httpURL := strings.Replace(baseURL, "wss://", "https://", 1)
+	httpURL = strings.Replace(httpURL, "ws://", "http://", 1)
+	if strings.Contains(httpURL, "/xiaozhi/v1/") {
+		httpURL = strings.TrimSuffix(httpURL, "/xiaozhi/v1/")
+	}
+	if !strings.HasSuffix(httpURL, "/") {
+		httpURL += "/"
+	}
+
+	// Use trailing slash to avoid 301 redirects (redirect chains can downgrade POST->GET).
+	checkURLs := []string{
+		httpURL + "xiaozhi/ota/",
+	}
+
+	var lastErr error
+	for _, checkURL := range checkURLs {
+		// Upstream returns activation only on POST in practice (ESP32 POSTs system info when available).
+		req, err := http.NewRequest("POST", checkURL, bytes.NewReader([]byte("{}")))
+		if err != nil {
+			lastErr = err
+			continue
+		}
+
+		req.Header.Set("Device-Id", deviceID)
+		if clientID != "" {
+			req.Header.Set("Client-Id", clientID)
+		}
+		req.Header.Set("Accept-Language", "vi-VN")
+		req.Header.Set("User-Agent", "wirepodxiaozhi/1.0")
+		if activationVersion == "" {
+			activationVersion = "1"
+		}
+		req.Header.Set("Activation-Version", activationVersion)
+		if serialNumber != "" {
+			req.Header.Set("Serial-Number", serialNumber)
+		}
+		req.Header.Set("Content-Type", "application/json")
+
+		client := &http.Client{Timeout: 30 * time.Second}
+		resp, err := client.Do(req)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		body, rerr := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if rerr != nil {
+			lastErr = rerr
+			continue
+		}
+		if resp.StatusCode != 200 {
+			lastErr = fmt.Errorf("upstream returned status %d from %s: %s", resp.StatusCode, checkURL, strings.TrimSpace(string(body)))
+			continue
+		}
+
+		var result map[string]interface{}
+		if err := json.Unmarshal(body, &result); err != nil {
+			lastErr = fmt.Errorf("failed to parse upstream JSON from %s: %w", checkURL, err)
+			continue
+		}
+
+		actAny, ok := result["activation"]
+		if !ok {
+			lastErr = fmt.Errorf("upstream response has no 'activation' field (%s)", checkURL)
+			continue
+		}
+
+		actObj, ok := actAny.(map[string]interface{})
+		if !ok {
+			lastErr = fmt.Errorf("upstream 'activation' is not an object (%s)", checkURL)
+			continue
+		}
+
+		act := &UpstreamActivation{Raw: result}
+		if v, ok := actObj["code"].(string); ok {
+			act.Code = v
+		}
+		if v, ok := actObj["challenge"].(string); ok {
+			act.Challenge = v
+		}
+		if v, ok := actObj["message"].(string); ok {
+			act.Message = v
+		}
+		// timeout_ms might be float64 (JSON number)
+		if v, ok := actObj["timeout_ms"].(float64); ok {
+			act.TimeoutMS = int(v)
+		}
+
+		// If upstream doesn't provide a code, still return the activation object so caller can show message.
+		return act, nil
+	}
+
+	if lastErr == nil {
+		lastErr = fmt.Errorf("failed to fetch upstream activation info")
+	}
+	return nil, lastErr
 }

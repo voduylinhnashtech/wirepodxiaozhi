@@ -1292,90 +1292,15 @@ function checkPairingStatusForSelectedMAC(macAddress) {
   if (!statusDiv) return;
   
   statusDiv.style.display = "block";
-  statusDiv.innerHTML = "<p style='color: #666;'>Đang kiểm tra trạng thái pairing...</p>";
-  
-  fetch(`/api/xiaozhi_check_device_status?device_id=${encodeURIComponent(macAddress)}`)
-    .then(response => {
-      if (!response || !response.ok) {
-        throw new Error(`HTTP ${response?.status || 'unknown'}`);
-      }
-      return response.json();
-    })
-    .then(data => {
-      if (data.is_activated) {
-        // Đã được pair - disable nút và hiển thị thông báo
-        if (generateBtn) {
-          generateBtn.disabled = true;
-          generateBtn.style.backgroundColor = "#9e9e9e";
-          generateBtn.style.cursor = "not-allowed";
-          generateBtn.title = "Thiết bị đã được pair, không cần generate pairing code nữa";
-        }
-        
-        let activatedInfo = "";
-        if (data.activated_at) {
-          const activatedAt = new Date(data.activated_at);
-          activatedInfo = `<br/><strong>Đã activate lúc:</strong> ${activatedAt.toLocaleString('vi-VN')}`;
-        }
-        
-        let clientIDInfo = "";
-        if (data.client_id) {
-          clientIDInfo = `<br/><strong>Client-Id (UUID):</strong> <code style="background: #e3f2fd; padding: 2px 6px; border-radius: 3px; font-family: monospace; color: #1976d2;">${data.client_id}</code>`;
-        }
-        
-        statusDiv.innerHTML = `
-          <div style="border-left: 4px solid #4caf50; padding-left: 15px;">
-            <p style="color: #2e7d32; font-weight: bold; margin: 0;">✅ Thiết bị đã được Pair/Activate</p>
-            <p style="color: #666; font-size: 12px; margin: 5px 0;">
-              MAC Address: <code style="background: #f5f5f5; padding: 2px 6px; border-radius: 3px; font-family: monospace;">${data.device_id}</code>
-              ${clientIDInfo}
-              ${activatedInfo}
-            </p>
-            <p style="color: #4caf50; font-size: 11px; margin: 5px 0;">Nút "Generate Pairing Code" đã bị khóa vì thiết bị đã được pair.</p>
-          </div>
-        `;
-      } else {
-        // Chưa được pair - enable nút
-        if (generateBtn) {
-          generateBtn.disabled = false;
-          generateBtn.style.backgroundColor = "#4285f4";
-          generateBtn.style.cursor = "pointer";
-          generateBtn.title = "";
-        }
-        
-        let statusInfo = "";
-        if (data.status === "connected_but_not_activated") {
-          statusInfo = `<p style="color: #ff9800; font-size: 11px; margin: 5px 0;">⚠️ Thiết bị đang kết nối nhưng chưa được activate. Hãy generate pairing code.</p>`;
-        } else {
-          statusInfo = `<p style="color: #666; font-size: 11px; margin: 5px 0;">Thiết bị chưa được pair. Bạn có thể generate pairing code.</p>`;
-        }
-        
-        let clientIDInfo = "";
-        if (data.client_id) {
-          clientIDInfo = `<br/><strong>Client-Id (UUID):</strong> <code style="background: #e3f2fd; padding: 2px 6px; border-radius: 3px; font-family: monospace; color: #1976d2;">${data.client_id}</code>`;
-        }
-        
-        statusDiv.innerHTML = `
-          <div style="border-left: 4px solid #ff9800; padding-left: 15px;">
-            <p style="color: #ff9800; font-weight: bold; margin: 0;">⚠️ Thiết bị chưa được Pair/Activate</p>
-            <p style="color: #666; font-size: 12px; margin: 5px 0;">
-              MAC Address: <code style="background: #f5f5f5; padding: 2px 6px; border-radius: 3px; font-family: monospace;">${data.device_id}</code>
-              ${clientIDInfo}
-            </p>
-            ${statusInfo}
-          </div>
-        `;
-      }
-    })
-    .catch(error => {
-      console.error("[Pairing] Lỗi khi kiểm tra trạng thái:", error);
-      // Nếu có lỗi, vẫn enable nút để user có thể thử
-      if (generateBtn) {
-        generateBtn.disabled = false;
-        generateBtn.style.backgroundColor = "#4285f4";
-        generateBtn.style.cursor = "pointer";
-      }
-      statusDiv.innerHTML = `<p style="color: #db4437; font-size: 11px;">⚠️ Không thể kiểm tra trạng thái pairing: ${error.message}. Bạn vẫn có thể thử generate pairing code.</p>`;
-    });
+  // Activation status check disabled (avoid unnecessary upstream calls/log spam)
+  statusDiv.innerHTML = "<p style='color: #666; font-size: 11px;'>ℹ️ Đã tắt kiểm tra trạng thái activate (disabled).</p>";
+  // Always allow generating pairing code
+  if (generateBtn) {
+    generateBtn.disabled = false;
+    generateBtn.style.backgroundColor = "#4285f4";
+    generateBtn.style.cursor = "pointer";
+    generateBtn.title = "";
+  }
 }
 
 function checkPairingStatusAndUpdateButton() {
@@ -1506,10 +1431,7 @@ function generatePairingCodeWithMAC(deviceId, clientId = "") {
           displayClientId.textContent = data.client_id;
         }
         
-        // Bắt đầu kiểm tra activation status mỗi 3 giây
-        if (deviceId) {
-          startActivationPolling(deviceId);
-        }
+        // Không auto-check activation status nữa (tránh spam upstream / không cần cho luồng pairing)
         
         // Hiển thị thông tin Device-Id và Client-Id
         let infoText = "";
@@ -1586,68 +1508,8 @@ function generatePairingCodeWithMAC(deviceId, clientId = "") {
 let activationPollingInterval = null;
 
 function startActivationPolling(deviceID) {
-  // Dừng polling cũ nếu có
-  if (activationPollingInterval) {
-    clearInterval(activationPollingInterval);
-  }
-  
-  let pollCount = 0;
-  const maxPolls = 200; // Tối đa 200 lần (10 phút với interval 3 giây)
-  
-  activationPollingInterval = setInterval(() => {
-    pollCount++;
-    
-    fetch(`/api/xiaozhi_check_device_status?device_id=${encodeURIComponent(deviceID)}`)
-      .then(response => response.json())
-      .then(data => {
-        if (data.is_activated) {
-          // Device đã được activate thành công!
-          clearInterval(activationPollingInterval);
-          activationPollingInterval = null;
-          
-          updateStepStatus(3, 'completed', '✅ Đã nhập code vào ESP32');
-          updateStepStatus(4, 'completed', '✅ ESP32 đã activate thành công!');
-          
-          // Hiển thị thông báo thành công
-          const activationStatusDiv = document.getElementById("activationStatus");
-          if (activationStatusDiv) {
-            activationStatusDiv.style.display = "block";
-            activationStatusDiv.innerHTML = `
-              <div style="padding: 15px; background-color: #e8f5e9; border-radius: 5px; border: 2px solid #4caf50;">
-                <p style="margin: 0; color: #2e7d32; font-weight: bold; font-size: 16px;">🎉 Pairing thành công!</p>
-                <p style="margin: 10px 0 0 0; color: #666; font-size: 14px;">
-                  Device <code style="background: #fff; padding: 2px 6px; border-radius: 3px; font-family: monospace;">${deviceID}</code> đã được activate thành công.
-                </p>
-                ${data.activated_at ? `<p style="margin: 5px 0 0 0; color: #666; font-size: 12px;">Thời gian: ${new Date(data.activated_at).toLocaleString('vi-VN')}</p>` : ''}
-              </div>
-            `;
-          }
-        } else if (pollCount >= maxPolls) {
-          // Hết thời gian chờ
-          clearInterval(activationPollingInterval);
-          activationPollingInterval = null;
-          
-          updateStepStatus(4, 'error', '⏱️ Hết thời gian chờ (10 phút)');
-          
-          const activationStatusDiv = document.getElementById("activationStatus");
-          if (activationStatusDiv) {
-            activationStatusDiv.style.display = "block";
-            activationStatusDiv.innerHTML = `
-              <div style="padding: 15px; background-color: #ffebee; border-radius: 5px; border: 2px solid #f44336;">
-                <p style="margin: 0; color: #c62828; font-weight: bold;">⏱️ Hết thời gian chờ</p>
-                <p style="margin: 10px 0 0 0; color: #666; font-size: 14px;">
-                  Device chưa được activate sau 10 phút. Vui lòng kiểm tra lại hoặc tạo pairing code mới.
-                </p>
-              </div>
-            `;
-          }
-        }
-      })
-      .catch(error => {
-        console.error("[Pairing] Lỗi khi polling activation status:", error);
-        // Không dừng polling vì có thể là lỗi tạm thời
-      });
-  }, 3000); // Kiểm tra mỗi 3 giây
+  // Disabled by design (avoid unnecessary upstream checks / log spam)
+  console.log("[Pairing] startActivationPolling disabled for device:", deviceID);
 }
 
 function checkDeviceStatus() {
@@ -1663,60 +1525,8 @@ function checkDeviceStatus() {
     return;
   }
   
-  resultDiv.innerHTML = `<p style="color: #666;">Đang kiểm tra...</p>`;
   resultDiv.style.display = "block";
-  
-  // Tạo URL với device_id và client_id (nếu có)
-  let url = `/api/xiaozhi_check_device_status?device_id=${encodeURIComponent(deviceId)}`;
-  if (clientId) {
-    url += `&client_id=${encodeURIComponent(clientId)}`;
-  }
-  
-  fetch(url)
-    .then(response => response.json())
-    .then(data => {
-      let html = `<div style="border-left: 4px solid ${data.is_activated ? '#4caf50' : '#ff9800'}; padding-left: 15px;">`;
-      
-      if (data.is_activated) {
-        html += `<h5 style="color: #2e7d32; margin-top: 0;">✅ Thiết bị đã được Pair/Activate</h5>`;
-        html += `<p style="color: #666; margin: 5px 0;"><strong>Device-Id:</strong> <code style="background: #f5f5f5; padding: 2px 6px; border-radius: 3px; font-family: monospace;">${data.device_id}</code></p>`;
-        if (data.client_id) {
-          html += `<p style="color: #666; margin: 5px 0;"><strong>Client-Id (UUID):</strong> <code style="background: #e3f2fd; padding: 2px 6px; border-radius: 3px; font-family: monospace; color: #1976d2;">${data.client_id}</code></p>`;
-        }
-        if (data.activated_at) {
-          const activatedAt = new Date(data.activated_at);
-          html += `<p style="color: #666; margin: 5px 0;"><strong>Đã activate lúc:</strong> ${activatedAt.toLocaleString('vi-VN')}</p>`;
-        }
-        if (data.last_seen) {
-          const lastSeen = new Date(data.last_seen);
-          html += `<p style="color: #666; margin: 5px 0;"><strong>Hoạt động gần nhất:</strong> ${lastSeen.toLocaleString('vi-VN')}</p>`;
-        }
-        html += `<p style="color: #4caf50; margin-top: 10px; font-weight: bold;">${data.message || 'Thiết bị đã sẵn sàng sử dụng!'}</p>`;
-      } else {
-        html += `<h5 style="color: #ff9800; margin-top: 0;">⚠️ Thiết bị chưa được Pair/Activate</h5>`;
-        html += `<p style="color: #666; margin: 5px 0;"><strong>Device-Id:</strong> <code style="background: #f5f5f5; padding: 2px 6px; border-radius: 3px; font-family: monospace;">${data.device_id}</code></p>`;
-        if (data.client_id) {
-          html += `<p style="color: #666; margin: 5px 0;"><strong>Client-Id (UUID):</strong> <code style="background: #e3f2fd; padding: 2px 6px; border-radius: 3px; font-family: monospace; color: #1976d2;">${data.client_id}</code></p>`;
-        }
-        html += `<p style="color: #666; margin: 5px 0;"><strong>Trạng thái:</strong> ${data.status}</p>`;
-        
-        if (data.status === "connected_but_not_activated") {
-          if (data.connected_at) {
-            const connectedAt = new Date(data.connected_at);
-            html += `<p style="color: #666; margin: 5px 0;"><strong>Kết nối lúc:</strong> ${connectedAt.toLocaleString('vi-VN')}</p>`;
-          }
-          html += `<p style="color: #ff9800; margin-top: 10px; font-weight: bold;">${data.message || 'Thiết bị đang kết nối nhưng cần nhập pairing code để activate.'}</p>`;
-        } else {
-          html += `<p style="color: #ff9800; margin-top: 10px; font-weight: bold;">${data.message || 'Hãy generate pairing code và nhập vào thiết bị để activate.'}</p>`;
-        }
-      }
-      
-      html += `</div>`;
-      resultDiv.innerHTML = html;
-    })
-    .catch(error => {
-      resultDiv.innerHTML = `<p style="color: #db4437;">❌ Lỗi khi kiểm tra: ${error.message}</p>`;
-    });
+  resultDiv.innerHTML = `<p style="color: #666;">ℹ️ Đã tắt chức năng kiểm tra trạng thái activate (disabled).</p>`;
 }
 
 function loadConnectedDevices() {
