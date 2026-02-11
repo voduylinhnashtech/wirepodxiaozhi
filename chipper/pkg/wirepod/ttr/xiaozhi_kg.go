@@ -32,6 +32,37 @@ const (
 	vectorChunkPace      = 25 * time.Millisecond
 )
 
+func xiaozhiDebugAudio() bool {
+	return os.Getenv("XIAOZHI_DEBUG_AUDIO") == "1"
+}
+
+// pcmAbsStats16LE returns simple amplitude stats for signed 16-bit little-endian PCM.
+// Useful to distinguish "we sent chunks" vs "we sent (near) silence".
+func pcmAbsStats16LE(pcm []byte) (peakAbs int32, avgAbs int32) {
+	if len(pcm) < 2 {
+		return 0, 0
+	}
+	var sumAbs int64
+	var peak int32
+	n := 0
+	for i := 0; i+1 < len(pcm); i += 2 {
+		s := int16(binary.LittleEndian.Uint16(pcm[i : i+2]))
+		v := int32(s)
+		if v < 0 {
+			v = -v
+		}
+		if v > peak {
+			peak = v
+		}
+		sumAbs += int64(v)
+		n++
+	}
+	if n == 0 {
+		return 0, 0
+	}
+	return peak, int32(sumAbs / int64(n))
+}
+
 // AudioQueue manages audio playback serialization per robot
 type AudioQueue struct {
 	ESN                   string
@@ -224,6 +255,10 @@ func (h *LLMHandler) HandleMessage(messageType int, message []byte) error {
 							for len(finalBuf) >= vectorAudioChunkBytes {
 								chunk := finalBuf[:vectorAudioChunkBytes]
 								finalBuf = finalBuf[vectorAudioChunkBytes:]
+								// CRITICAL: Serialize all vclient.Send() calls (gRPC streams are not thread-safe).
+								// Flush timer goroutine may still be running briefly; without sendMu this can race and
+								// cause intermittent "sent ok but robot silent" / dropped audio.
+								h.sendMu.Lock()
 								err := vclient.Send(&vectorpb.ExternalAudioStreamRequest{
 									AudioRequestType: &vectorpb.ExternalAudioStreamRequest_AudioStreamChunk{
 										AudioStreamChunk: &vectorpb.ExternalAudioStreamChunk{
@@ -232,6 +267,7 @@ func (h *LLMHandler) HandleMessage(messageType int, message []byte) error {
 										},
 									},
 								})
+								h.sendMu.Unlock()
 								if err != nil {
 									logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] ⚠️  ERROR - Failed to send final padded audio chunk: %v", err))
 									break
@@ -265,6 +301,7 @@ func (h *LLMHandler) HandleMessage(messageType int, message []byte) error {
 								chunk := finalChunk[:vectorAudioChunkBytes]
 								finalChunk = finalChunk[vectorAudioChunkBytes:]
 								for retry := 0; retry < maxRetries; retry++ {
+									h.sendMu.Lock()
 									err = vclient.Send(&vectorpb.ExternalAudioStreamRequest{
 										AudioRequestType: &vectorpb.ExternalAudioStreamRequest_AudioStreamChunk{
 											AudioStreamChunk: &vectorpb.ExternalAudioStreamChunk{
@@ -273,6 +310,7 @@ func (h *LLMHandler) HandleMessage(messageType int, message []byte) error {
 											},
 										},
 									})
+									h.sendMu.Unlock()
 									if err == nil {
 										time.Sleep(vectorChunkPace)
 										break
@@ -300,11 +338,13 @@ func (h *LLMHandler) HandleMessage(messageType int, message []byte) error {
 						retryDelay := 10 * time.Millisecond
 						var err error
 						for retry := 0; retry < maxRetries; retry++ {
+							h.sendMu.Lock()
 							err = vclient.Send(&vectorpb.ExternalAudioStreamRequest{
 								AudioRequestType: &vectorpb.ExternalAudioStreamRequest_AudioStreamComplete{
 									AudioStreamComplete: &vectorpb.ExternalAudioStreamComplete{},
 								},
 							})
+							h.sendMu.Unlock()
 							if err == nil {
 								break
 							}
@@ -487,6 +527,10 @@ func (h *LLMHandler) HandleMessage(messageType int, message []byte) error {
 			// Add retry logic like OpenAI TTS to ensure audio is always sent
 			if count <= 5 {
 				logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] 📤 Sending chunk: size=%d bytes, vclient=%v", len(chunkToSend), vclient != nil))
+			}
+			if xiaozhiDebugAudio() && (count <= 5) {
+				peakAbs, avgAbs := pcmAbsStats16LE(chunkToSend)
+				logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] 🔎 PCM stats (16LE): peakAbs=%d avgAbs=%d (chunkBytes=%d, frame#=%d)", peakAbs, avgAbs, len(chunkToSend), count))
 			}
 			var err error
 			maxRetries := 3
@@ -1114,6 +1158,8 @@ func StreamingXiaozhiKG(esn string, transcribedText string, isKG bool, isConvers
 					// CRITICAL: Must send AudioStreamPrepare again for each TTS session
 					// Vector SDK requires Prepare before each audio playback (even with same client)
 					// When websocket reconnects, robot may need more time to process Prepare (similar to new client)
+					// CRITICAL: Serialize prepare with any potential concurrent chunk flushes.
+					llmHandler.sendMu.Lock()
 					err := vclient.Send(&vectorpb.ExternalAudioStreamRequest{
 						AudioRequestType: &vectorpb.ExternalAudioStreamRequest_AudioStreamPrepare{
 							AudioStreamPrepare: &vectorpb.ExternalAudioStreamPrepare{
@@ -1123,6 +1169,7 @@ func StreamingXiaozhiKG(esn string, transcribedText string, isKG bool, isConvers
 							},
 						},
 					})
+					llmHandler.sendMu.Unlock()
 					if err != nil {
 						logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ⚠️  WARNING - Failed to send AudioStreamPrepare on reused client (stream may be closed): %v. Will remove from pool and create new one.", esn, err))
 						// Remove invalid client from pool and create new one
@@ -1175,6 +1222,8 @@ func StreamingXiaozhiKG(esn string, transcribedText string, isKG bool, isConvers
 				logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ✅ Audio playback client created successfully", esn))
 
 				// Prepare audio stream (only once, when creating new client)
+				// CRITICAL: Serialize prepare with any potential concurrent chunk flushes.
+				llmHandler.sendMu.Lock()
 				err = vclient.Send(&vectorpb.ExternalAudioStreamRequest{
 					AudioRequestType: &vectorpb.ExternalAudioStreamRequest_AudioStreamPrepare{
 						AudioStreamPrepare: &vectorpb.ExternalAudioStreamPrepare{
@@ -1183,6 +1232,7 @@ func StreamingXiaozhiKG(esn string, transcribedText string, isKG bool, isConvers
 						},
 					},
 				})
+				llmHandler.sendMu.Unlock()
 				if err != nil {
 					logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ⚠️  WARNING - Failed to send AudioStreamPrepare: %v. Disabling audio playback.", esn, err))
 					vclient = nil

@@ -768,6 +768,14 @@ func STT(sreq sr.SpeechRequest) (string, error) {
 	// Register STT handler with connection manager
 	// Ensure handler is active when registering (in case it was deactivated from previous request)
 	if deviceID != "" {
+		// IMPORTANT: Clear any previous LLM/TTS handler before starting a new STT turn.
+		// Upstream server may emit llm/tts + binary audio immediately after `listen stop` even if we
+		// end up serving a local intent. If an old LLM handler remains active, it can accidentally
+		// play upstream TTS for a locally-handled intent (exactly the logs you saw).
+		//
+		// We will register the LLM handler again ONLY when we actually start a KG/LLM request.
+		xiaozhi.SetLLMHandler(deviceID, nil)
+
 		sttHandler.SetActive(true) // Ensure handler is active when registering
 		xiaozhi.SetSTTHandler(deviceID, sttHandler)
 		logger.Println(fmt.Sprintf("Xiaozhi STT: STT handler registered for device %s (active: true)", deviceID))
