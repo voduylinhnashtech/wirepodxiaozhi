@@ -312,6 +312,85 @@ func LoadIntents() ([]JsonIntent, error) {
 	return jsonIntents, err
 }
 
+// LoadMultilingualIntents loads and merges intent keyphrases from all available language files
+// This allows Xiaozhi to understand intents in multiple languages simultaneously
+// For example: both "happy new year" (en-US) and "chúc mừng năm mới" (vi-VN) will match intent_seasonal_happynewyear
+func LoadMultilingualIntents() ([]JsonIntent, error) {
+	var path string
+	if runtime.GOOS == "darwin" && Packaged {
+		appPath, _ := os.Executable()
+		path = filepath.Dir(appPath) + "/../Frameworks/chipper/"
+	} else if runtime.GOOS == "android" || runtime.GOOS == "ios" {
+		path = AndroidPath + "/static/"
+	} else {
+		path = "./"
+	}
+
+	// List of all supported languages
+	languages := []string{"en-US", "vi-VN", "zh-CN", "es-ES", "fr-FR", "de-DE", "it-IT", "pt-BR", "pl-PL", "ru-RU", "tr-TR", "uk-UA", "ko-KR", "nt-NL"}
+
+	// Blacklist of intents to skip (not needed for Xiaozhi/Vector)
+	blacklist := map[string]bool{
+		"intent_amazon_signin":  true, // Alexa signin - not relevant for Vector/Xiaozhi
+		"intent_amazon_signout": true, // Alexa signout - not relevant for Vector/Xiaozhi
+	}
+
+	// Map to merge intents by name
+	intentMap := make(map[string]*JsonIntent)
+
+	totalKeyphrases := 0
+	loadedLanguages := 0
+
+	for _, lang := range languages {
+		filePath := path + "intent-data/" + lang + ".json"
+		jsonFile, err := os.ReadFile(filePath)
+		if err != nil {
+			// Skip if file doesn't exist
+			continue
+		}
+
+		var langIntents []JsonIntent
+		err = json.Unmarshal(jsonFile, &langIntents)
+		if err != nil {
+			logger.Println("Warning: Failed to unmarshal intents for " + lang + ": " + err.Error())
+			continue
+		}
+
+		loadedLanguages++
+
+		// Merge keyphrases into intentMap
+		for _, intent := range langIntents {
+			// Skip blacklisted intents
+			if blacklist[intent.Name] {
+				continue
+			}
+			
+			if existing, ok := intentMap[intent.Name]; ok {
+				// Intent already exists, merge keyphrases
+				existing.Keyphrases = append(existing.Keyphrases, intent.Keyphrases...)
+			} else {
+				// New intent, add to map
+				intentCopy := intent
+				intentMap[intent.Name] = &intentCopy
+			}
+		}
+	}
+
+	// Convert map back to slice
+	var mergedIntents []JsonIntent
+	for _, intent := range intentMap {
+		totalKeyphrases += len(intent.Keyphrases)
+		mergedIntents = append(mergedIntents, *intent)
+	}
+
+	if loadedLanguages == 0 {
+		return nil, fmt.Errorf("no intent files found")
+	}
+
+	logger.Println(fmt.Sprintf("✅ Loaded multilingual intents: %d intents, %d total keyphrases from %d languages", len(mergedIntents), totalKeyphrases, loadedLanguages))
+	return mergedIntents, nil
+}
+
 func WriteJdocs() {
 	writeBytes, _ := json.Marshal(BotJdocs)
 	os.WriteFile(JdocsPath, writeBytes, 0644)

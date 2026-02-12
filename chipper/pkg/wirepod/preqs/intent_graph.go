@@ -36,7 +36,14 @@ func (s *Server) ProcessIntentGraph(req *vtt.IntentGraphRequest) (*vtt.IntentGra
 			logger.Println("Bot " + speechReq.Device + " STT returned empty transcript, not sending intent to avoid wifi icon")
 			return nil, nil
 		}
-		successMatched = ttr.ProcessTextAll(req, transcribedText, vars.IntentList, speechReq.IsOpus)
+		
+		// Check if Xiaozhi intent matching is disabled
+		if vars.APIConfig.Knowledge.Provider == "xiaozhi" && vars.APIConfig.Knowledge.XiaozhiDisableIntent {
+			logger.Println("Bot " + speechReq.Device + " Xiaozhi local intent matching is disabled (IntentGraph), forcing LLM request")
+			successMatched = false // Force to go to LLM
+		} else {
+			successMatched = ttr.ProcessTextAll(req, transcribedText, vars.IntentList, speechReq.IsOpus)
+		}
 	} else {
 		intent, slots, err := stiHandler(speechReq)
 		if err != nil {

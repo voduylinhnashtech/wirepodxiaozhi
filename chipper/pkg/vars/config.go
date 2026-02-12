@@ -34,9 +34,10 @@ type apiConfig struct {
 		SaveChat               bool    `json:"save_chat"`
 		CommandsEnable         bool    `json:"commands_enable"`
 		Endpoint               string  `json:"endpoint"`
-		DeviceID               string  `json:"device_id"` // MAC address cho xiaozhi
-		ClientID               string  `json:"client_id"` // Client ID (UUID) cho xiaozhi
-		XiaozhiTTSVolume       string  `json:"xiaozhi_tts_volume"` // normal|medium|high (maps to 1x|2x|4x)
+		DeviceID               string  `json:"device_id"`               // MAC address cho xiaozhi
+		ClientID               string  `json:"client_id"`               // Client ID (UUID) cho xiaozhi
+		XiaozhiTTSVolume       string  `json:"xiaozhi_tts_volume"`      // normal|medium|high (maps to 1x|2x|4x)
+		XiaozhiDisableIntent   bool    `json:"xiaozhi_disable_intent"`  // Disable local intent matching for Xiaozhi
 		TopP                   float32 `json:"top_p"`
 		Temperature            float32 `json:"temp"`
 	} `json:"knowledge"`
@@ -130,6 +131,28 @@ func ReadConfig() {
 		if APIConfig.Knowledge.Model == "meta-llama/Llama-2-70b-chat-hf" {
 			logger.Println("Setting Together model to Llama3")
 			APIConfig.Knowledge.Model = "meta-llama/Llama-3-70b-chat-hf"
+		}
+
+		// Auto-configure default settings for first-time setup (Xiaozhi + Escape Pod)
+		// This skips the initial setup page and goes straight to the main setup page
+		if !APIConfig.PastInitialSetup {
+			logger.Println("🔧 First-time setup detected - Auto-configuring defaults (Xiaozhi STT + Escape Pod)")
+			
+			// Set Escape Pod mode (recommended for production robots)
+			APIConfig.Server.EPConfig = true
+			APIConfig.Server.Port = "443"
+			
+			// Set Xiaozhi as default STT service
+			APIConfig.STT.Service = "xiaozhi"
+			APIConfig.STT.Language = "vi-VN" // Default to Vietnamese, can be changed later
+			
+			// Mark initial setup as complete to skip initial.html
+			APIConfig.PastInitialSetup = true
+			APIConfig.HasReadFromEnv = true
+			
+			logger.Println("✅ Auto-config complete: EPConfig=true, Port=443, STT=xiaozhi, Language=vi-VN")
+			logger.Println("ℹ️  You can change these settings in the web interface at http://localhost:8080")
+			logger.Println("ℹ️  Skipping initial setup page - going straight to main setup")
 		}
 
 		writeBytes, _ := json.Marshal(APIConfig)

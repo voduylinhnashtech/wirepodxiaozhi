@@ -1,218 +1,210 @@
 [
     {
         "name": "intent_names_username_extend",
-        "keyphrases": ["Tên"]
+        "keyphrases": ["Tên là gì", "Tên mình", "Tên của bạn", "Bạn tên gì", "Tên bạn là gì"]
     },
     {
         "name": "intent_weather_extend",
-        "keyphrases": ["Thời tiết", "Dự báo thời tiết", "Thời tiết ngày mai", "Thời tiết hôm nay"]
+        "keyphrases": ["Thời tiết", "Dự báo thời tiết", "Thời tiết ngày mai", "Thời tiết hôm nay", "Hôm nay thời tiết thế nào", "Trời có mưa không", "Nắng không", "Nhiệt độ bao nhiêu", "Độ ẩm bao nhiêu"]
     },
     {
         "name": "intent_names_ask",
-        "keyphrases": ["Tên của tôi", "Tôi là", "Tôi là ai"]
+        "keyphrases": ["Tên của tôi", "Tôi là ai", "Tôi tên gì", "Mình tên gì", "Bạn biết tôi là ai không", "Tôi tên là gì"]
     },
     {
         "name": "intent_imperative_eyecolor",
-        "keyphrases": ["Màu mắt", "Màu sắc"]
+        "keyphrases": ["Màu mắt", "Màu sắc mắt", "Đổi màu mắt", "Thay đổi màu mắt", "Đổi màu mắt sang", "Chuyển màu mắt"]
     },
     {
         "name": "intent_character_age",
-        "keyphrases": ["Bao nhiêu tuổi", "Bạn bao nhiêu tuổi"]
+        "keyphrases": ["Bao nhiêu tuổi", "Bạn bao nhiêu tuổi", "Tuổi của bạn", "Mấy tuổi rồi", "Bạn mấy tuổi", "Bạn sinh năm nào"]
     },
     {
         "name": "intent_explore_start",
-        "keyphrases": ["Đi dạo", "Tự do"]
+        "keyphrases": ["Đi dạo", "Tự do đi", "Khám phá đi", "Đi chơi đi", "Tự do khám phá", "Dạo chơi", "Dạo một vòng", "Đi dạo một vòng"]
     },
     {
         "name": "intent_system_charger",
-        "keyphrases": ["Về nhà", "Sạc điện","Võ Duy Linh"]
+        "keyphrases": ["Về nhà", "Sạc điện", "Về sạc", "Về đế sạc", "Đi sạc đi", "Về chỗ sạc", "Trở về nhà", "Về chỗ cũ", "Về chỗ ban đầu", "Đi về nhà"]
     },
     {
         "name": "intent_system_sleep",
-        "keyphrases": ["Ngủ", "Đi ngủ", "Ngủ đi"]
+        "keyphrases": ["Đi ngủ", "Ngủ đi", "Đi ngủ thôi", "Nghỉ ngơi đi", "Ngủ ngon", "Đi nghỉ", "Nghỉ đi", "Đi ngủ nào"]
     },
     {
         "name": "intent_greeting_goodmorning",
-        "keyphrases": ["Chào buổi sáng", "Chào buổi trưa", "Chào buổi chiều", "Xin chào"]
+        "keyphrases": ["Chào buổi sáng", "Chào buổi trưa", "Chào buổi chiều", "Xin chào", "Chào bạn", "Chào nhé", "Hello buổi sáng", "Good morning"]
     },
     {
         "name": "intent_greeting_goodnight",
-        "keyphrases": ["Chúc ngủ ngon"]
+        "keyphrases": ["Chúc ngủ ngon", "Ngủ ngon nhé", "Chúc ngủ ngon nhé", "Chúc ngủ ngon nha", "Buổi tối tốt lành", "Chúc bạn ngủ ngon"]
     },
     {
         "name": "intent_greeting_goodbye",
-        "keyphrases": ["Tạm biệt", "Gặp lại sau"]
+        "keyphrases": ["Tạm biệt", "Gặp lại sau", "Hẹn gặp lại", "Bye bye", "Tạm biệt nhé", "Chào tạm biệt", "Bái bai", "Gặp lại nhé"]
     },
     {
         "name": "intent_seasonal_happynewyear",
-        "keyphrases": ["Chúc mừng năm mới", "Pháo hoa", "Ăn mừng", "Võ Duy Linh"]
+        "keyphrases": ["Chúc mừng năm mới", "Pháo hoa năm mới", "Ăn mừng năm mới", "Năm mới vui vẻ", "Happy new year", "Xuân về", "Tết đến", "Chúc tết"]
     },
     {
         "name": "intent_seasonal_happyholidays",
-        "keyphrases": ["Vui vẻ", "Ngày lễ", "Kỳ nghỉ lễ"]
-    },
-    {
-        "name": "intent_amazon_signin",
-        "keyphrases": ["đăng nhập trợ lý ảo", "đăng ký trợ lý ảo"]
-    },
-    {
-        "name": "intent_amazon_signout",
-        "keyphrases": ["đăng xuất trợ lý ảo", "đăng xuất trợ lý ảo"]
+        "keyphrases": ["Ngày lễ vui vẻ", "Kỳ nghỉ lễ", "Ngày nghỉ lễ", "Nghỉ lễ vui vẻ", "Lễ hội vui vẻ"]
     },
     {
         "name": "intent_imperative_forward",
-        "keyphrases": ["Tiến lên", "Đi tới"]
+        "keyphrases": ["Tiến lên", "Đi tới", "Tiến tới", "Đi về phía trước", "Tiến về phía trước", "Đi thẳng", "Tiến thẳng"]
     },
     {
         "name": "intent_imperative_turnaround",
-        "keyphrases": ["Quay lại", "Quay đầu", "Quay người"]
+        "keyphrases": ["Quay lại", "Quay đầu lại", "Quay người lại", "Quay lưng lại", "Xoay người lại", "Quay 180 độ", "Quay ngược lại"]
     },
     {
         "name": "intent_imperative_turnleft",
-        "keyphrases": ["Rẽ trái", "Quay trái"]
+        "keyphrases": ["Rẽ trái", "Quay trái", "Sang trái", "Xoay sang trái", "Đi sang trái", "Quẹo trái"]
     },
     {
         "name": "intent_imperative_turnright",
-        "keyphrases": ["Rẽ phải", "Quay phải"]
+        "keyphrases": ["Rẽ phải", "Quay phải", "Sang phải", "Xoay sang phải", "Đi sang phải", "Quẹo phải"]
     },
     {
         "name": "intent_play_rollcube",
-        "keyphrases": ["Chơi khối vuông"]
+        "keyphrases": ["Chơi khối vuông", "Lăn khối vuông", "Đẩy khối vuông", "Chơi cube", "Roll cube", "Lăn cube"]
     },
     {
         "name": "intent_play_popawheelie",
-        "keyphrases": ["Giơ tay"]
+        "keyphrases": ["Giơ tay lên", "Nâng tay lên", "Giơ cánh tay", "Pop a wheelie", "Ngửa lên", "Nâng đầu lên"]
     },
     {
         "name": "intent_play_fistbump",
-        "keyphrases": ["Cụng tay", "Đập tay"]
+        "keyphrases": ["Cụng tay", "Đập tay", "Fist bump", "Chạm tay vào", "Ăn tay", "Đập năm"]
     },
     {
         "name": "intent_play_blackjack",
-        "keyphrases": ["Chơi bài", "Đánh bài"]
+        "keyphrases": ["Chơi bài blackjack", "Đánh bài blackjack", "Blackjack", "Xì dách", "Chơi xì dách"]
     },
     {
         "name": "intent_imperative_affirmative",
-        "keyphrases": ["Đúng", "Tất nhiên", "Chính xác", "Phải"]
+        "keyphrases": ["Đúng rồi", "Tất nhiên rồi", "Chính xác rồi", "Đúng vậy", "Đồng ý rồi", "Okay đi", "Oke luôn", "Được thôi", "Ừ nhỉ"]
     },
     {
         "name": "intent_imperative_negative",
-        "keyphrases": ["Không", "Sai"]
+        "keyphrases": ["Không đúng đâu", "Không phải đâu", "Không đồng ý", "Thôi đi", "Từ chối", "Sai rồi", "Không nha"]
     },
     {
         "name": "intent_photo_take_extend",
-        "keyphrases": ["Chụp ảnh"]
+        "keyphrases": ["Chụp ảnh đi", "Chụp hình đi", "Chụp một tấm", "Chụp ảnh cho tôi", "Chụp bức ảnh", "Take a photo", "Chụp ảnh nào"]
     },
     {
         "name": "intent_imperative_praise",
-        "keyphrases": ["Tuyệt vời", "Thông minh"]
+        "keyphrases": ["Tuyệt vời lắm", "Thông minh quá", "Giỏi quá đi", "Giỏi lắm", "Hay quá đi", "Giỏi thật", "Tốt lắm", "Good job", "Xuất sắc lắm", "Tài giỏi thật"]
     },
     {
         "name": "intent_imperative_abuse",
-        "keyphrases": ["Ngốc", "Ngu ngốc"]
+        "keyphrases": ["Ngốc nghếch", "Ngu ngốc", "Ngu quá", "Dở quá", "Tệ quá", "Không tốt chút nào", "Bad robot"]
     },
     {
         "name": "intent_imperative_apologize",
-        "keyphrases": ["Xin lỗi", "Lỗi của tôi"]
+        "keyphrases": ["Xin lỗi nhé", "Lỗi của tôi", "Tôi xin lỗi", "Sorry nhé", "Xin lỗi bạn", "Lỗi của mình"]
     },
     {
         "name": "intent_imperative_backup",
-        "keyphrases": ["Lại đây", "Quay lại", "võ duy linh"]
+        "keyphrases": ["Lùi lại đi", "Đi lùi", "Quay lại phía sau", "Lùi ra sau", "Backup đi", "Đi về phía sau", "Lùi xe"]
     },
     {
         "name": "intent_imperative_volumedown",
-        "keyphrases": ["Giảm âm lượng", "Nhỏ tiếng"]
+        "keyphrases": ["Giảm âm lượng", "Nhỏ tiếng lại", "Giảm âm thanh", "Nhỏ lại đi", "Giảm tiếng xuống", "Nhỏ hơn đi", "Volume down"]
     },
     {
         "name": "intent_imperative_volumeup",
-        "keyphrases": ["Tăng âm lượng", "To tiếng"]
+        "keyphrases": ["Tăng âm lượng", "To tiếng lên", "Tăng âm thanh", "To lên đi", "Tăng tiếng lên", "To hơn đi", "Volume up", "Lớn hơn đi"]
     },
     {
         "name": "intent_imperative_lookatme",
-        "keyphrases": ["Nhìn tôi", "Nhìn vào tôi"]
+        "keyphrases": ["Nhìn tôi đi", "Nhìn vào tôi", "Nhìn mình đi", "Nhìn đây đi", "Look at me", "Nhìn sang đây"]
     },
     {
         "name": "intent_imperative_volumelevel_extend",
-        "keyphrases": ["Âm lượng"]
+        "keyphrases": ["Âm lượng bao nhiêu", "Volume level", "Âm thanh bao nhiêu", "Độ to bao nhiêu", "Set volume"]
     },
     {
         "name": "intent_imperative_shutup",
-        "keyphrases": ["Im miệng"]
+        "keyphrases": ["Im miệng đi", "Câm miệng", "Dừng lại đi", "Ngừng nói đi", "Im đi", "Shut up", "Dừng ngay", "Stop talking"]
     },
     {
         "name": "intent_greeting_hello",
-        "keyphrases": ["Xin chào", "Chào bạn"]
+        "keyphrases": ["Xin chào bạn", "Chào bạn nhé", "Hello Vector", "Hi Vector", "Hey Vector"]
     },
     {
         "name": "intent_imperative_come",
-        "keyphrases": ["Lại đây"]
+        "keyphrases": ["Lại đây đi", "Đến đây đi", "Tới đây nào", "Come here", "Lại gần đi", "Đi lại đây"]
     },
     {
         "name": "intent_imperative_love",
-        "keyphrases": ["Yêu thích", "Yêu"]
+        "keyphrases": ["Yêu thích bạn", "Yêu bạn lắm", "I love you", "Thích bạn lắm", "Mến bạn lắm", "Yêu bạn nhiều"]
     },
     {
         "name": "intent_knowledge_promptquestion",
-        "keyphrases": ["Câu hỏi", "Trả lời"]
+        "keyphrases": ["Câu hỏi nè", "Trả lời câu hỏi", "Hỏi bạn nè", "Tôi có câu hỏi", "Question time", "Cho mình hỏi"]
     },
     {
         "name": "intent_clock_checktimer",
-        "keyphrases": ["Kiểm tra báo thức", "Xem báo thức"]
+        "keyphrases": ["Kiểm tra báo thức", "Xem báo thức", "Báo thức nào đã đặt", "Check timer", "Xem timer", "Còn báo thức nào"]
     },
     {
         "name": "intent_global_stop_extend",
-        "keyphrases": ["Hủy báo thức", "Tắt báo thức"]
+        "keyphrases": ["Hủy báo thức", "Tắt báo thức đi", "Xóa báo thức", "Stop timer", "Cancel timer", "Dừng báo thức"]
     },
     {
         "name": "intent_clock_settimer_extend",
-        "keyphrases": ["Đặt báo thức", "Cài báo thức"]
+        "keyphrases": ["Đặt báo thức", "Cài báo thức", "Set timer", "Đặt timer", "Hẹn giờ báo thức", "Cài đặt báo thức"]
     },
     {
         "name": "intent_clock_time",
-        "keyphrases": ["Thời gian", "Mấy giờ rồi"]
+        "keyphrases": ["Thời gian bây giờ", "Mấy giờ rồi", "Bây giờ là mấy giờ", "What time is it", "Bây giờ mấy giờ", "Mấy giờ bây giờ", "Giờ này mấy giờ"]
     },
     {
         "name": "intent_imperative_quiet",
-        "keyphrases": ["Yên lặng", "Nghỉ ngơi"]
+        "keyphrases": ["Yên lặng đi", "Nghỉ ngơi đi", "Im lặng nào", "Be quiet", "Yên tĩnh đi", "Dừng lại nào", "Ngưng đi"]
     },
     {
         "name": "intent_imperative_dance",
-        "keyphrases": ["Nhảy múa", "Nhảy đi"]
+        "keyphrases": ["Nhảy múa đi", "Nhảy đi nào", "Dance for me", "Nhảy cho vui", "Múa đi", "Nhảy cho tôi xem"]
     },
     {
         "name": "intent_play_pickupcube",
-        "keyphrases": ["Nhặt khối vuông", "Đưa khối vuông cho tôi"]
+        "keyphrases": ["Nhặt khối vuông", "Đưa khối vuông cho tôi", "Pick up cube", "Lấy khối vuông lên", "Nhặt cube lên"]
     },
     {
         "name": "intent_imperative_fetchcube",
-        "keyphrases": ["Lấy khối vuông"]
+        "keyphrases": ["Lấy khối vuông đi", "Fetch cube", "Tìm và lấy khối vuông", "Đi lấy khối vuông"]
     },
     {
         "name": "intent_imperative_findcube",
-        "keyphrases": ["Tìm khối vuông"]
+        "keyphrases": ["Tìm khối vuông đi", "Find cube", "Tìm cube đi", "Khối vuông ở đâu", "Tìm kiếm khối vuông"]
     },
     {
         "name": "intent_play_anytrick",
-        "keyphrases": ["Kỹ năng"]
+        "keyphrases": ["Kỹ năng của bạn", "Show me a trick", "Biểu diễn đi", "Màn trình diễn", "Khả năng của bạn", "Làm gì đó đi", "Trick nào"]
     },
     {
         "name": "intent_message_recordmessage_extend",
-        "keyphrases": ["Ghi lại"]
+        "keyphrases": ["Ghi lại tin nhắn", "Record message", "Ghi âm tin nhắn", "Thu âm tin nhắn", "Ghi tin nhắn", "Record a message"]
     },
     {
         "name": "intent_message_playmessage_extend",
-        "keyphrases": ["Phát tin nhắn"]
+        "keyphrases": ["Phát tin nhắn", "Play message", "Nghe tin nhắn", "Phát lại tin nhắn", "Play the message"]
     },
     {
         "name": "intent_blackjack_hit",
-        "keyphrases": ["Đánh"]
+        "keyphrases": ["Đánh tiếp", "Hit me", "Rút bài", "Lấy bài", "Thêm bài nữa"]
     },
     {
         "name": "intent_blackjack_stand",
-        "keyphrases": ["Đứng"]
+        "keyphrases": ["Đứng yên", "Stand", "Giữ nguyên", "Không rút nữa", "Dừng lại thôi"]
     },
     {
         "name": "intent_play_keepaway",
-        "keyphrases": ["Đi chỗ khác", "Xa ra"]
+        "keyphrases": ["Đi chỗ khác", "Xa ra đi", "Keep away", "Tránh ra đi", "Đi xa ra", "Ra xa đi"]
     }
 ]

@@ -28,6 +28,7 @@ type ConnectionInfo struct {
 	ReaderRunning      bool
 	ReaderStop         chan struct{}
 	LastAudioChunkTime time.Time    // Track when last audio chunk was received from robot (indicates robot is listening)
+	droppedAudioCount  int          // Counter for dropped audio frames (for rate-limited logging)
 	mu                 sync.RWMutex // For reading ConnectionInfo fields
 	writeMu            sync.Mutex   // For serializing writes to WebSocket connection (WebSocket is not thread-safe for concurrent writes)
 }
@@ -258,9 +259,21 @@ func StartReader(deviceID string, conn *websocket.Conn, sessionID string) {
 			// 1) BinaryMessage (TTS audio) → LLM handler
 			if messageType == websocket.BinaryMessage {
 				if llmHandler == nil {
-					logger.Println(fmt.Sprintf("[ConnectionManager] ⚠️  Binary audio received for device %s but no LLM handler is set (len=%d). Dropping audio.", deviceID, len(message)))
+					// Rate-limit this log to avoid spam (only log first time and every 100th frame)
+					connInfo.mu.Lock()
+					connInfo.droppedAudioCount++
+					count := connInfo.droppedAudioCount
+					connInfo.mu.Unlock()
+
+					if count == 1 || count%100 == 0 {
+						logger.Println(fmt.Sprintf("[ConnectionManager] ⚠️  Binary audio received for device %s but no LLM handler is set (len=%d). Dropped %d frames total.", deviceID, len(message), count))
+					}
 					continue
 				}
+				// Reset counter when handler is available
+				connInfo.mu.Lock()
+				connInfo.droppedAudioCount = 0
+				connInfo.mu.Unlock()
 				if !llmHandler.IsActive() {
 					logger.Println(fmt.Sprintf("[ConnectionManager] ⚠️  Binary audio received for device %s but LLM handler inactive; activating to handle audio", deviceID))
 					llmHandler.SetActive(true)

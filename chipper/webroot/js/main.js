@@ -403,6 +403,7 @@ function checkKG() {
       getE("intentGraphInput").style.display = "block";
       getE("xiaozhiInput").style.display = "block";
       getE("saveChatInput").style.display = "block";
+      getE("xiaozhiDisableIntentInput").style.display = "block";
       getE("llmCommandInput").style.display = "block";
       getE("openAIVoiceForEnglishInput").style.display = "block";
     } else if (provider === "together") {
@@ -469,6 +470,7 @@ function sendKGAPIKey() {
     data.xiaozhi_tts_volume = volEl ? volEl.value : "normal";
     data.intentgraph = getE("intentyes").checked
     data.save_chat = getE("saveChatYes").checked
+    data.xiaozhi_disable_intent = getE("xiaozhiDisableIntent").checked
     data.commands_enable = getE("commandYes").checked
     data.openai_voice_with_english = getE("voiceEnglishYes").checked
   } else if (provider === "custom") {
@@ -556,6 +558,7 @@ function updateKGAPI() {
         getE("commandYes").checked = data.commands_enable
         getE("intentyes").checked = data.intentgraph
         getE("saveChatYes").checked = data.save_chat
+        getE("xiaozhiDisableIntent").checked = data.xiaozhi_disable_intent || false
         getE("voiceEnglishYes").checked = data.openai_voice_with_english
       } else if (data.provider === "together") {
         getE("togetherKey").value = data.key;

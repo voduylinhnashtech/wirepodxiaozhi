@@ -145,7 +145,16 @@ func New(InitFunc func() error, SttHandler interface{}, voiceProcessor string) (
 		vars.APIConfig.STT.Language = "en-US"
 	}
 	sttLanguage = vars.APIConfig.STT.Language
-	vars.IntentList, _ = vars.LoadIntents()
+	
+	// For Xiaozhi, use multilingual intents to support multiple languages simultaneously
+	// This allows both "happy new year" and "chúc mừng năm mới" to match the same intent
+	if voiceProcessor == "xiaozhi" {
+		logger.Println("Using multilingual intent matching for Xiaozhi (supports all available languages)")
+		vars.IntentList, _ = vars.LoadMultilingualIntents()
+	} else {
+		vars.IntentList, _ = vars.LoadIntents()
+	}
+	
 	logger.Println("Initiating " + voiceProcessor + " voice processor with language " + sttLanguage)
 	vars.SttInitFunc = InitFunc
 	err := InitFunc()

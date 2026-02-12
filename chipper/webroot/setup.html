@@ -205,6 +205,12 @@
                 </label></br>
                 <a href="#" onclick="deleteSavedChats()">Delete Saved Chats</a>
               </span>
+              <span id="xiaozhiDisableIntentInput" style="display: none">
+                <input type="checkbox" id="xiaozhiDisableIntent" name="xiaozhiDisableIntent" />
+                <label class="checkbox-label" for="xiaozhiDisableIntent">
+                  Disable local intent matching for Xiaozhi. When enabled, all voice commands will be sent directly to the LLM server without checking local intents first. This allows the LLM to handle all commands, including complex requests.
+                </label>
+              </span>
               <span id="openAIVoiceForEnglishInput" style="display: none">
                 <input type="checkbox" id="voiceEnglishYes" name="voiceEnglishselect" />
                 <label class="checkbox-label" for="voiceEnglishYes">
