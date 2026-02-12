@@ -435,6 +435,7 @@ function sendKGAPIKey() {
     save_chat: false,
     commands_enable: false,
     endpoint: "",
+    xiaozhi_tts_volume: "normal",
   };
   if (provider === "openai") {
     data.key = getE("openaiKey").value;
@@ -463,6 +464,9 @@ function sendKGAPIKey() {
       data.client_id = "";
     }
     data.openai_voice = getE("xiaozhiVoice").value;
+    // Xiaozhi TTS volume (normal|medium|high)
+    const volEl = getE("xiaozhiTTSVolume");
+    data.xiaozhi_tts_volume = volEl ? volEl.value : "normal";
     data.intentgraph = getE("intentyes").checked
     data.save_chat = getE("saveChatYes").checked
     data.commands_enable = getE("commandYes").checked
@@ -544,6 +548,11 @@ function updateKGAPI() {
           console.warn("[KG API] xiaozhiClientID input not found");
         }
         getE("xiaozhiVoice").value = data.openai_voice || "fable";
+        // Xiaozhi TTS volume (normal|medium|high)
+        const volEl = getE("xiaozhiTTSVolume");
+        if (volEl) {
+          volEl.value = data.xiaozhi_tts_volume || "normal";
+        }
         getE("commandYes").checked = data.commands_enable
         getE("intentyes").checked = data.intentgraph
         getE("saveChatYes").checked = data.save_chat

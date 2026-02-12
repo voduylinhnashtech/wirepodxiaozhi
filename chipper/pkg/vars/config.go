@@ -36,6 +36,7 @@ type apiConfig struct {
 		Endpoint               string  `json:"endpoint"`
 		DeviceID               string  `json:"device_id"` // MAC address cho xiaozhi
 		ClientID               string  `json:"client_id"` // Client ID (UUID) cho xiaozhi
+		XiaozhiTTSVolume       string  `json:"xiaozhi_tts_volume"` // normal|medium|high (maps to 1x|2x|4x)
 		TopP                   float32 `json:"top_p"`
 		Temperature            float32 `json:"temp"`
 	} `json:"knowledge"`

@@ -5,8 +5,10 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -61,6 +63,70 @@ func pcmAbsStats16LE(pcm []byte) (peakAbs int32, avgAbs int32) {
 		return 0, 0
 	}
 	return peak, int32(sumAbs / int64(n))
+}
+
+// xiaozhiTTSGain returns a multiplicative gain applied to 16-bit PCM before sending to Vector.
+// Default is 4.0 (per user request). You can override via env XIAOZHI_TTS_GAIN (e.g. "2.5").
+func xiaozhiTTSGain() float64 {
+	// Explicit env override always wins (useful for quick tuning without UI changes).
+	v := strings.TrimSpace(os.Getenv("XIAOZHI_TTS_GAIN"))
+	if v == "" {
+		// Use Knowledge Graph config when provider is xiaozhi.
+		if vars.APIConfig.Knowledge.Provider == "xiaozhi" {
+			switch strings.ToLower(strings.TrimSpace(vars.APIConfig.Knowledge.XiaozhiTTSVolume)) {
+			case "high":
+				return 4.0
+			case "medium":
+				return 2.0
+			case "normal", "":
+				return 1.0
+			default:
+				// Backward/advanced: allow numeric string (e.g. "3", "4.5").
+				if f, err := strconv.ParseFloat(vars.APIConfig.Knowledge.XiaozhiTTSVolume, 64); err == nil && f > 0 {
+					if f > 10 {
+						return 10
+					}
+					return f
+				}
+				return 1.0
+			}
+		}
+		return 1.0
+	}
+	f, err := strconv.ParseFloat(v, 64)
+	if err != nil || f <= 0 {
+		return 1.0
+	}
+	// Keep sane bounds.
+	if f > 10 {
+		return 10
+	}
+	return f
+}
+
+// applyGainSoftLimit16LE applies gain then a soft limiter (tanh) to avoid hard clipping/distortion.
+// Input/output are signed 16-bit little-endian PCM.
+func applyGainSoftLimit16LE(pcm []byte, gain float64) []byte {
+	if gain <= 1.0 || len(pcm) < 2 {
+		return pcm
+	}
+	// Copy-on-write to avoid mutating shared buffers.
+	out := make([]byte, len(pcm))
+	// Scale to keep a bit of headroom.
+	const outScale = 0.98
+	for i := 0; i+1 < len(pcm); i += 2 {
+		s := int16(binary.LittleEndian.Uint16(pcm[i : i+2]))
+		x := float64(s) / 32768.0
+		y := math.Tanh(x*gain) * outScale
+		iv := int32(math.Round(y * 32767.0))
+		if iv > math.MaxInt16 {
+			iv = math.MaxInt16
+		} else if iv < math.MinInt16 {
+			iv = math.MinInt16
+		}
+		binary.LittleEndian.PutUint16(out[i:i+2], uint16(int16(iv)))
+	}
+	return out
 }
 
 // AudioQueue manages audio playback serialization per robot
@@ -476,6 +542,8 @@ func (h *LLMHandler) HandleMessage(messageType int, message []byte) error {
 
 		// Downsample 24kHz → 16kHz (stream-friendly: no per-frame padding; chunking happens on accumulated buffer)
 		downsampledBytes := downsample24kTo16kLinear(framePCMBytes)
+		// Boost loudness (x4 by default) with soft limiter to avoid clipping/distortion.
+		downsampledBytes = applyGainSoftLimit16LE(downsampledBytes, xiaozhiTTSGain())
 		if len(downsampledBytes) == 0 {
 			if count <= 5 {
 				logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] ⚠️  Downsample returned 0 bytes (frame #%d, PCM size: %d bytes)", count, len(framePCMBytes)))
