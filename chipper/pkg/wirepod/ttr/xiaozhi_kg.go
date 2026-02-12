@@ -166,6 +166,8 @@ type LLMHandler struct {
 	active                  bool
 	audioChunkCount         int
 	ttsStopped              bool      // Flag to indicate TTS has stopped
+	ttsStopReceived         bool      // TTS stop event received (do NOT finalize synchronously in reader)
+	audioFinalized          bool      // AudioStreamComplete already sent for this TTS turn
 	lastFrameTime           time.Time // Track when last audio frame was received
 	esn                     string    // Robot ESN for checking first audio playback
 	websocketReconnected    bool      // Flag to indicate websocket was reconnected (for first chunk delay)
@@ -252,6 +254,8 @@ func (h *LLMHandler) HandleMessage(messageType int, message []byte) error {
 					// Reset counter when TTS starts
 					h.mu.Lock()
 					h.audioChunkCount = 0
+					h.ttsStopReceived = false
+					h.audioFinalized = false
 					h.mu.Unlock()
 					logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] ✅ TTS started, ready to receive Opus frames"))
 				} else if state == "sentence_start" {
@@ -266,180 +270,14 @@ func (h *LLMHandler) HandleMessage(messageType int, message []byte) error {
 						}
 					}
 				} else if state == "stop" {
-					// TTS stopped - send final buffer and AudioStreamComplete (synchronous processing)
+					// CRITICAL: Do NOT finalize synchronously here.
+					// This handler is called from the single websocket reader goroutine via ConnectionManager.
+					// Sleeping/sending chunks here will block reads and can cause upstream to close (1005) or
+					// cut off trailing audio frames.
 					h.mu.Lock()
-					h.ttsStopped = true
-					vclient := h.vclient
-					accumulatedBuffer := h.accumulatedBuffer
-					chunkCount := h.chunkCount
-					flushTimerStop := h.flushTimerStop
-					healthCheckStop := h.healthCheckStop
+					h.ttsStopReceived = true
 					h.mu.Unlock()
-					logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] 🔊 TTS stopped, sending final buffer and completion"))
-
-					// IMPORTANT: Stop flush timer and health check FIRST and wait for them to fully stop
-					// This ensures all pending chunks are sent before AudioStreamComplete
-					if flushTimerStop != nil {
-						select {
-						case flushTimerStop <- true:
-							logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] ✅ Flush timer stop signal sent"))
-						default:
-						}
-					}
-					if healthCheckStop != nil {
-						select {
-						case healthCheckStop <- true:
-							logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] ✅ Health check stop signal sent"))
-						default:
-						}
-					}
-					// Wait for timers to fully stop (give them time to finish current cycle)
-					time.Sleep(200 * time.Millisecond)
-
-					// Signal TTS stop
-					select {
-					case h.ttsStopChan <- true:
-						logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] ✅ TTS stop signal sent"))
-					default:
-					}
-
-					// Wait longer for any remaining frames (1 second) to ensure all audio is received
-					time.Sleep(1 * time.Second)
-
-					// Re-check buffer after wait (in case new frames arrived)
-					h.mu.Lock()
-					accumulatedBuffer = h.accumulatedBuffer
-					h.mu.Unlock()
-
-					// Send final buffer and AudioStreamComplete
-					if vclient != nil {
-						// Send final buffer if any
-						if len(accumulatedBuffer) > 0 {
-							// Pad to Vector-friendly chunk boundary, then send in 1024-byte chunks paced like /api-sdk/play_sound
-							sentFinal := 0
-							finalBuf := padToMultiple(accumulatedBuffer, vectorAudioChunkBytes)
-							for len(finalBuf) >= vectorAudioChunkBytes {
-								chunk := finalBuf[:vectorAudioChunkBytes]
-								finalBuf = finalBuf[vectorAudioChunkBytes:]
-								// CRITICAL: Serialize all vclient.Send() calls (gRPC streams are not thread-safe).
-								// Flush timer goroutine may still be running briefly; without sendMu this can race and
-								// cause intermittent "sent ok but robot silent" / dropped audio.
-								h.sendMu.Lock()
-								err := vclient.Send(&vectorpb.ExternalAudioStreamRequest{
-									AudioRequestType: &vectorpb.ExternalAudioStreamRequest_AudioStreamChunk{
-										AudioStreamChunk: &vectorpb.ExternalAudioStreamChunk{
-											AudioChunkSizeBytes: uint32(len(chunk)),
-											AudioChunkSamples:   chunk,
-										},
-									},
-								})
-								h.sendMu.Unlock()
-								if err != nil {
-									logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] ⚠️  ERROR - Failed to send final padded audio chunk: %v", err))
-									break
-								}
-								sentFinal++
-								time.Sleep(vectorChunkPace)
-							}
-							// Clear buffer after sending final padded chunks
-							h.mu.Lock()
-							h.accumulatedBuffer = []byte{}
-							h.mu.Unlock()
-							if sentFinal > 0 {
-								logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] ✅ Sent %d final padded chunk(s) before AudioStreamComplete", sentFinal))
-								time.Sleep(200 * time.Millisecond)
-							}
-						}
-
-						// IMPORTANT: Double-check buffer is empty before sending AudioStreamComplete
-						// This ensures all chunks have been sent
-						h.mu.Lock()
-						if len(h.accumulatedBuffer) > 0 {
-							logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] ⚠️  WARNING - Buffer still has %d bytes, sending as final chunk before AudioStreamComplete", len(h.accumulatedBuffer)))
-							finalChunk := padToMultiple(h.accumulatedBuffer, vectorAudioChunkBytes)
-							h.accumulatedBuffer = []byte{}
-							h.mu.Unlock()
-							// Send remaining buffer with retry logic (like OpenAI TTS), chunked to 1024 bytes
-							maxRetries := 3
-							retryDelay := 10 * time.Millisecond
-							var err error
-							for len(finalChunk) >= vectorAudioChunkBytes {
-								chunk := finalChunk[:vectorAudioChunkBytes]
-								finalChunk = finalChunk[vectorAudioChunkBytes:]
-								for retry := 0; retry < maxRetries; retry++ {
-									h.sendMu.Lock()
-									err = vclient.Send(&vectorpb.ExternalAudioStreamRequest{
-										AudioRequestType: &vectorpb.ExternalAudioStreamRequest_AudioStreamChunk{
-											AudioStreamChunk: &vectorpb.ExternalAudioStreamChunk{
-												AudioChunkSizeBytes: uint32(len(chunk)),
-												AudioChunkSamples:   chunk,
-											},
-										},
-									})
-									h.sendMu.Unlock()
-									if err == nil {
-										time.Sleep(vectorChunkPace)
-										break
-									}
-									if retry < maxRetries-1 {
-										logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] ⚠️  Retry %d/%d sending final buffer chunk: %v", retry+1, maxRetries, err))
-										time.Sleep(retryDelay)
-										retryDelay *= 2
-									}
-								}
-								if err != nil {
-									break
-								}
-							}
-							if err != nil {
-								logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] ⚠️  Failed to send remaining buffer after %d retries: %v", maxRetries, err))
-							}
-						} else {
-							h.mu.Unlock()
-						}
-
-						// Send AudioStreamComplete - NOW all chunks should be sent
-						// Add retry logic to ensure complete is always sent (like OpenAI TTS)
-						maxRetries := 3
-						retryDelay := 10 * time.Millisecond
-						var err error
-						for retry := 0; retry < maxRetries; retry++ {
-							h.sendMu.Lock()
-							err = vclient.Send(&vectorpb.ExternalAudioStreamRequest{
-								AudioRequestType: &vectorpb.ExternalAudioStreamRequest_AudioStreamComplete{
-									AudioStreamComplete: &vectorpb.ExternalAudioStreamComplete{},
-								},
-							})
-							h.sendMu.Unlock()
-							if err == nil {
-								break
-							}
-							if retry < maxRetries-1 {
-								logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] ⚠️  Retry %d/%d sending AudioStreamComplete: %v", retry+1, maxRetries, err))
-								time.Sleep(retryDelay)
-								retryDelay *= 2
-							}
-						}
-						if err != nil {
-							logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] ⚠️  ERROR - Failed to send AudioStreamComplete after %d retries: %v", maxRetries, err))
-						} else {
-							logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] ✅ AudioStreamComplete sent (total chunks sent: %d)", chunkCount))
-							// Clear buffer
-							h.mu.Lock()
-							h.accumulatedBuffer = []byte{}
-							h.mu.Unlock()
-							// IMPORTANT: Signal that AudioStreamComplete has been sent
-							// This allows DoNewRequest to proceed safely (vclient won't be closed)
-							select {
-							case h.audioStreamCompleteChan <- true:
-								logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] ✅ AudioStreamComplete signal sent"))
-							default:
-							}
-							// IMPORTANT: Wait longer after AudioStreamComplete to ensure robot starts playing audio
-							// Robot needs time to process all chunks and start playback
-							time.Sleep(1 * time.Second)
-						}
-					}
+					logger.Println("[Xiaozhi KG Handler] 🟡 TTS stop received; will finalize after last audio frames arrive (non-blocking)")
 				}
 			}
 		case "error":
@@ -464,7 +302,7 @@ func (h *LLMHandler) HandleMessage(messageType int, message []byte) error {
 			// Some servers end a TTS stream with "goodbye" instead of sending a final "tts" state:"stop".
 			// If we don't finalize (flush + AudioStreamComplete), Vector may buffer and never play anything.
 			h.mu.RLock()
-			alreadyStopped := h.ttsStopped
+			alreadyStopped := h.ttsStopReceived
 			h.mu.RUnlock()
 			if !alreadyStopped {
 				// Trigger the same finalize logic as a normal TTS stop.
@@ -1393,6 +1231,8 @@ func StreamingXiaozhiKG(esn string, transcribedText string, isKG bool, isConvers
 						lastSendTime := llmHandler.lastSendTime
 						lastFrameTime := llmHandler.lastFrameTime
 						ttsStopped := llmHandler.ttsStopped
+						ttsStopReceived := llmHandler.ttsStopReceived
+						audioFinalized := llmHandler.audioFinalized
 						chunkCount := llmHandler.chunkCount
 						audioChunkCount := llmHandler.audioChunkCount
 						llmHandler.mu.Unlock()
@@ -1485,6 +1325,89 @@ func StreamingXiaozhiKG(esn string, transcribedText string, isKG bool, isConvers
 							} else {
 								logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] ⚠️  Failed to auto-send AudioStreamComplete: %v", err))
 							}
+							continue
+						}
+
+						// If server signaled TTS stop, finalize soon after the last frame arrives.
+						// This avoids cutting off trailing frames while still completing promptly.
+						if ttsStopReceived && !audioFinalized && vclient != nil && !lastFrameTime.IsZero() && timeSinceLastFrame > 250*time.Millisecond {
+							llmHandler.mu.Lock()
+							// Re-check under lock to avoid duplicate finalization.
+							if llmHandler.audioFinalized {
+								llmHandler.mu.Unlock()
+								continue
+							}
+							// Mark finalized to prevent double-send.
+							llmHandler.audioFinalized = true
+							// Snapshot buffer for flush.
+							buf := llmHandler.accumulatedBuffer
+							llmHandler.accumulatedBuffer = []byte{}
+							llmHandler.ttsStopped = true
+							llmHandler.mu.Unlock()
+
+							// Flush any remaining buffer (pad to 1024 boundary, paced).
+							if len(buf) > 0 {
+								finalBuf := padToMultiple(buf, vectorAudioChunkBytes)
+								for len(finalBuf) >= vectorAudioChunkBytes {
+									chunk := finalBuf[:vectorAudioChunkBytes]
+									finalBuf = finalBuf[vectorAudioChunkBytes:]
+									llmHandler.sendMu.Lock()
+									err := vclient.Send(&vectorpb.ExternalAudioStreamRequest{
+										AudioRequestType: &vectorpb.ExternalAudioStreamRequest_AudioStreamChunk{
+											AudioStreamChunk: &vectorpb.ExternalAudioStreamChunk{
+												AudioChunkSizeBytes: uint32(len(chunk)),
+												AudioChunkSamples:   chunk,
+											},
+										},
+									})
+									llmHandler.sendMu.Unlock()
+									if err != nil {
+										logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] ⚠️  Failed to flush final chunk on stop: %v", err))
+										break
+									}
+									time.Sleep(vectorChunkPace)
+								}
+							}
+
+							// Send AudioStreamComplete.
+							llmHandler.sendMu.Lock()
+							err := vclient.Send(&vectorpb.ExternalAudioStreamRequest{
+								AudioRequestType: &vectorpb.ExternalAudioStreamRequest_AudioStreamComplete{
+									AudioStreamComplete: &vectorpb.ExternalAudioStreamComplete{},
+								},
+							})
+							llmHandler.sendMu.Unlock()
+							if err != nil {
+								logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] ⚠️  Failed to send AudioStreamComplete on stop: %v", err))
+							} else {
+								logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] ✅ AudioStreamComplete sent (stop-finalize) (total chunks: %d)", chunkCount))
+								select {
+								case llmHandler.audioStreamCompleteChan <- true:
+								default:
+								}
+							}
+
+							// Signal TTS stop (now that finalize is done).
+							select {
+							case llmHandler.ttsStopChan <- true:
+								logger.Println("[Xiaozhi KG Handler] ✅ TTS stop signal sent (after finalize)")
+							default:
+							}
+
+							// Stop helper goroutines.
+							if llmHandler.healthCheckStop != nil {
+								select {
+								case llmHandler.healthCheckStop <- true:
+								default:
+								}
+							}
+							if llmHandler.flushTimerStop != nil {
+								select {
+								case llmHandler.flushTimerStop <- true:
+								default:
+								}
+							}
+
 							continue
 						}
 

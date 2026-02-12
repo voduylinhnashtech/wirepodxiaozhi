@@ -246,29 +246,15 @@ func (h *STTHandler) HandleMessage(messageType int, message []byte) error {
 						}
 					}()
 				} else {
-					// Empty transcript from server - send to channel immediately to avoid timeout
-					// Empty transcript có thể xảy ra khi:
-					// 1. Audio không đủ rõ để transcribe
-					// 2. Server không nhận đủ audio data
-					// 3. Audio quá ngắn hoặc chỉ có noise
-					// Log full event JSON for debugging (this is high-signal when STT keeps returning empty)
-					logger.Println(fmt.Sprintf("Xiaozhi STT Handler: ⚠️  Received empty transcript from server (stt event with empty text). Raw event: %s", string(message)))
-					func() {
-						defer func() {
-							if r := recover(); r != nil {
-								logger.Println(fmt.Sprintf("Xiaozhi STT Handler: ⚠️  transcriptChan is closed, dropping empty transcript (recovered from panic: %v)", r))
-							}
-						}()
-						select {
-						case h.transcriptChan <- "":
-							logger.Println(fmt.Sprintf("Xiaozhi STT Handler: ✅ Empty transcript sent to channel (server returned empty text) - handler will remain active for potential TTS messages"))
-							// IMPORTANT: Do NOT mark transcriptReceived=true for empty transcripts.
-							// If we do, IsActive() becomes false and the handler stops receiving messages,
-							// breaking subsequent STT attempts even though the websocket is still alive.
-						default:
-							logger.Println(fmt.Sprintf("Xiaozhi STT Handler: ⚠️  transcriptChan is full, dropping empty transcript"))
-						}
-					}()
+					// Empty transcript from server.
+					//
+					// IMPORTANT: Do NOT immediately forward "" to transcriptChan.
+					// Xiaozhi upstream can emit an early `stt` event with empty text (interim/ack) and then
+					// later send the real transcript. If we forward "", the STT request will end early and
+					// the caller will think "no STT" (exactly what you observed).
+					//
+					// Instead, log and keep waiting for a non-empty transcript (or a real timeout/error).
+					logger.Println(fmt.Sprintf("Xiaozhi STT Handler: ⚠️  Received empty transcript from server (stt event with empty text). Ignoring and waiting for non-empty transcript. Raw event: %s", string(message)))
 				}
 			} else {
 				// Server sent "stt" event but no "text" field
@@ -768,6 +754,15 @@ func STT(sreq sr.SpeechRequest) (string, error) {
 	// Register STT handler with connection manager
 	// Ensure handler is active when registering (in case it was deactivated from previous request)
 	if deviceID != "" {
+		// IMPORTANT: Prevent upstream "auto TTS" (sent immediately after listen stop) from being played
+		// for locally-handled intents.
+		//
+		// We keep the handler pointer but deactivate it at the start of each STT turn; KG flow will
+		// explicitly register/activate a fresh LLM handler when it needs TTS playback.
+		if h := xiaozhi.GetLLMHandler(deviceID); h != nil {
+			h.SetActive(false)
+		}
+
 		sttHandler.SetActive(true) // Ensure handler is active when registering
 		xiaozhi.SetSTTHandler(deviceID, sttHandler)
 		logger.Println(fmt.Sprintf("Xiaozhi STT: STT handler registered for device %s (active: true)", deviceID))
@@ -981,39 +976,21 @@ func STT(sreq sr.SpeechRequest) (string, error) {
 								// Tiếp tục xử lý chunk này (không return, tiếp tục vòng lặp)
 								// Chunk sẽ được xử lý ở phần code phía dưới (encode và gửi)
 							} else {
-								// Vẫn không có audio sau retry, return empty transcript
-								logger.Println(fmt.Sprintf("Xiaozhi STT: ⚠️  Still no audio after retry, returning empty transcript"))
+								// Vẫn không có audio sau retry
+								// KHÔNG gửi "" vào transcriptChan - để vòng wait tự timeout hoặc đợi transcript thật từ server
+								logger.Println(fmt.Sprintf("Xiaozhi STT: ⚠️  Still no audio after retry (context canceled/timeout) - stopping audio sending, will wait for server or timeout"))
 								// Signal done to stop audio sending loop
 								signalDone()
-								// Send empty transcript to transcriptChan (not error)
-								select {
-								case transcriptChan <- "":
-									logger.Println("Xiaozhi STT: Empty transcript sent to channel (context canceled)")
-								default:
-								}
 								return
 							}
 						} else {
-							logger.Println(fmt.Sprintf("Xiaozhi STT: ⚠️  Context canceled while getting audio chunk (user cancel or timeout) - returning empty transcript, keeping connection"))
+							// Context canceled với chunks đã gửi - KHÔNG gửi "" vào transcriptChan
+							// Để vòng wait tự timeout hoặc đợi transcript thật từ server
+							logger.Println(fmt.Sprintf("Xiaozhi STT: ⚠️  Context canceled while getting audio chunk (user cancel or timeout) after %d chunks - stopping audio sending, will wait for server or timeout", chunkCount))
 							// Signal done to stop audio sending loop
 							signalDone()
-							// Send empty transcript to transcriptChan (not error)
-							select {
-							case transcriptChan <- "":
-								logger.Println("Xiaozhi STT: Empty transcript sent to channel (context canceled)")
-							default:
-							}
 							return
 						}
-						// Signal done to stop audio sending loop
-						signalDone()
-						// Send empty transcript to transcriptChan (not error)
-						select {
-						case transcriptChan <- "":
-							logger.Println("Xiaozhi STT: Empty transcript sent to channel (context canceled)")
-						default:
-						}
-						return
 					}
 					// Try to send error, but don't panic if channel is closed
 					logger.Println(fmt.Sprintf("Xiaozhi STT: ERROR - Failed to get audio chunk: %v (type: %T)", err, err))
@@ -1293,10 +1270,11 @@ func STT(sreq sr.SpeechRequest) (string, error) {
 
 					sendListenStop("end_of_speech")
 
-					// Wait longer for server to process long speech (increased from 500ms to 2s)
+					// Wait longer for server to process long speech (increased from 2s to 5s)
 					// This gives server more time to process long audio and send transcript
-					time.Sleep(2 * time.Second)
-					logger.Println(fmt.Sprintf("Xiaozhi STT: End of speech detected, waiting for transcript from server (after listen stop)"))
+					// Server may need more time for long/complex speech recognition
+					time.Sleep(5 * time.Second)
+					logger.Println(fmt.Sprintf("Xiaozhi STT: End of speech detected, waited 5s for server to process. Will continue waiting for transcript (up to 180s total timeout)"))
 
 					// KHÔNG đóng connection ở đây - LLM reader sẽ tiếp tục đọc từ connection này
 					// Chỉ dừng gửi audio chunks, nhưng tiếp tục đọc messages để LLM reader có thể xử lý
@@ -1316,80 +1294,90 @@ func STT(sreq sr.SpeechRequest) (string, error) {
 	}()
 
 	// Step 7: Wait for transcript or error
-	// Increased timeout to 120s to handle long speech processing
-	safeLog("Xiaozhi STT: Waiting for transcript or error (timeout: 120s)")
-	select {
-	case transcript := <-transcriptChan:
-		safeLog("Xiaozhi STT: SUCCESS - Received transcript for device %s: %s", sreq.Device, transcript)
-
-		// Check if connection failed before storing
-		failed := false
+	// Increased timeout to 180s to handle long speech processing
+	// This gives server ample time to process long/complex speech and return transcript
+	safeLog("Xiaozhi STT: Waiting for transcript or error (timeout: 180s)")
+	timeout := time.NewTimer(180 * time.Second)
+	defer timeout.Stop()
+	for {
 		select {
-		case failed = <-connectionFailed:
-		default:
-		}
-
-		// Connection already stored in manager (if new connection) or already exists (if reused)
-		// Handle empty transcript case: keep handler active if transcript is empty
-		if deviceID != "" {
-			// Check if connection is actually closed or failed
-			if failed || conn.RemoteAddr() == nil {
-				safeLog("Xiaozhi STT: ⚠️  Connection failed or invalid, closing")
-				// Close and remove invalid connection
-				if connReused {
-					xiaozhi.CloseConnection(deviceID)
-				} else {
-					conn.Close()
-				}
-			} else if transcript == "" {
-				// Empty transcript - keep STT handler active to handle server messages
-				// This prevents "No active handler" errors when server sends messages
-				safeLog("Xiaozhi STT: Empty transcript received, keeping STT handler active for device %s (sessionID: %s) to handle server messages", deviceID, sessionID)
-				// Don't deactivate handler - it will be deactivated when next STT request comes or connection closes
-			} else {
-				// Non-empty transcript - deactivate STT handler, LLM will take over
-				sttHandler.SetActive(false)
-				safeLog("Xiaozhi STT: STT handler deactivated for device %s (sessionID: %s) - connection kept for LLM", deviceID, sessionID)
+		case transcript := <-transcriptChan:
+			// CRITICAL: Ignore empty transcripts and keep waiting.
+			// Upstream can emit empty stt events or our internal cancel paths can push "".
+			// Returning early here causes "no STT" on subsequent attempts.
+			if transcript == "" {
+				safeLog("Xiaozhi STT: ⚠️  Empty transcript received (ignored). Continuing to wait for non-empty transcript for device %s (sessionID: %s)", sreq.Device, sessionID)
+				continue
 			}
-		} else {
-			// Nếu không có deviceID, đóng connection ngay
-			safeLog("Xiaozhi STT: No deviceID, closing connection immediately")
-			conn.Close()
-		}
-		return transcript, nil
-	case err := <-errChan:
-		// Check if error is "DeadlineExceeded" or "context canceled" - treat as empty transcript, don't close connection
-		errStr := ""
-		if err != nil {
-			errStr = err.Error()
-		}
-		if strings.Contains(errStr, "DeadlineExceeded") || strings.Contains(errStr, "deadline exceeded") || strings.Contains(errStr, "context canceled") || strings.Contains(errStr, "Canceled") {
-			safeLog("Xiaozhi STT: ⚠️  DeadlineExceeded/context canceled for device %s: %v - treating as empty transcript, keeping connection", sreq.Device, err)
+
+			safeLog("Xiaozhi STT: SUCCESS - Received transcript for device %s: %s", sreq.Device, transcript)
+
+			// Check if connection failed before storing
+			failed := false
+			select {
+			case failed = <-connectionFailed:
+			default:
+			}
+
+			// Connection already stored in manager (if new connection) or already exists (if reused)
+			if deviceID != "" {
+				// Check if connection is actually closed or failed
+				if failed || conn.RemoteAddr() == nil {
+					safeLog("Xiaozhi STT: ⚠️  Connection failed or invalid, closing")
+					// Close and remove invalid connection
+					if connReused {
+						xiaozhi.CloseConnection(deviceID)
+					} else {
+						conn.Close()
+					}
+				} else {
+					// Non-empty transcript - deactivate STT handler, LLM will take over
+					sttHandler.SetActive(false)
+					safeLog("Xiaozhi STT: STT handler deactivated for device %s (sessionID: %s) - connection kept for LLM", deviceID, sessionID)
+				}
+			} else {
+				// Nếu không có deviceID, đóng connection ngay
+				safeLog("Xiaozhi STT: No deviceID, closing connection immediately")
+				conn.Close()
+			}
+			return transcript, nil
+
+		case err := <-errChan:
+			// Check if error is "DeadlineExceeded" or "context canceled" - treat as empty transcript, don't close connection
+			errStr := ""
+			if err != nil {
+				errStr = err.Error()
+			}
+			if strings.Contains(errStr, "DeadlineExceeded") || strings.Contains(errStr, "deadline exceeded") || strings.Contains(errStr, "context canceled") || strings.Contains(errStr, "Canceled") {
+				safeLog("Xiaozhi STT: ⚠️  DeadlineExceeded/context canceled for device %s: %v - returning empty transcript, keeping connection", sreq.Device, err)
+				// Don't close connection - let it be reused for next request
+				return "", nil // Return empty transcript, not error
+			}
+			safeLog("Xiaozhi STT: ERROR - Received error from errChan for device %s: %v (type: %T)", sreq.Device, err, err)
+			// Đóng connection nếu có lỗi thực sự
+			if deviceID != "" {
+				xiaozhi.CloseConnection(deviceID) // Đóng connection khi có lỗi
+			} else {
+				conn.Close()
+			}
+			return "", err
+
+		case <-ctx.Done():
+			// Context canceled - this is not a real error, just user cancel or timeout
+			// Don't close connection, just return empty transcript (connection will be kept for reuse)
+			safeLog("Xiaozhi STT: ⚠️  Context canceled for device %s: %v - returning empty transcript, keeping connection", sreq.Device, ctx.Err())
 			// Don't close connection - let it be reused for next request
 			return "", nil // Return empty transcript, not error
+
+		case <-timeout.C:
+			safeLog("Xiaozhi STT: ERROR - Timeout waiting for transcript for device %s (180s)", sreq.Device)
+			// Đóng connection nếu timeout
+			if deviceID != "" {
+				xiaozhi.CloseConnection(deviceID) // Đóng connection khi timeout
+			} else {
+				conn.Close()
+			}
+			return "", fmt.Errorf("timeout waiting for transcript")
 		}
-		safeLog("Xiaozhi STT: ERROR - Received error from errChan for device %s: %v (type: %T)", sreq.Device, err, err)
-		// Đóng connection nếu có lỗi thực sự
-		if deviceID != "" {
-			xiaozhi.CloseConnection(deviceID) // Đóng connection khi có lỗi
-		} else {
-			conn.Close()
-		}
-		return "", err
-	case <-ctx.Done():
-		// Context canceled - this is not a real error, just user cancel or timeout
-		// Don't close connection, just return empty transcript (connection will be kept for reuse)
-		safeLog("Xiaozhi STT: ⚠️  Context canceled for device %s: %v - returning empty transcript, keeping connection", sreq.Device, ctx.Err())
-		// Don't close connection - let it be reused for next request
-		return "", nil // Return empty transcript, not error
-	case <-time.After(120 * time.Second):
-		safeLog("Xiaozhi STT: ERROR - Timeout waiting for transcript for device %s (120s)", sreq.Device)
-		// Đóng connection nếu timeout
-		if deviceID != "" {
-			xiaozhi.CloseConnection(deviceID) // Đóng connection khi timeout
-		} else {
-			conn.Close()
-		}
-		return "", fmt.Errorf("timeout waiting for transcript")
 	}
 }
