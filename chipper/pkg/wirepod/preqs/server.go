@@ -146,12 +146,32 @@ func New(InitFunc func() error, SttHandler interface{}, voiceProcessor string) (
 	}
 	sttLanguage = vars.APIConfig.STT.Language
 	
-	// For Xiaozhi, use multilingual intents to support multiple languages simultaneously
-	// This allows both "happy new year" and "chúc mừng năm mới" to match the same intent
-	if voiceProcessor == "xiaozhi" {
-		logger.Println("Using multilingual intent matching for Xiaozhi (supports all available languages)")
+	// Load intents based on intent matching mode setting
+	// Multilingual mode loads intents from all available languages simultaneously
+	// This allows commands like "happy new year" and "chúc mừng năm mới" to match the same intent
+	
+	// Check intent matching mode from config
+	intentMode := vars.APIConfig.STT.IntentMatchingMode
+	useMultilingual := false
+	
+	// Determine if we should use multilingual mode
+	if intentMode == "multilingual" {
+		useMultilingual = true
+	} else if intentMode == "" || intentMode == "single" {
+		// For Xiaozhi: Always default to multilingual for better UX (backward compatibility)
+		// For other providers: Use single language mode (respect language selection)
+		if voiceProcessor == "xiaozhi" {
+			useMultilingual = true
+			logger.Println("⚠️  Xiaozhi detected - overriding to multilingual mode for better UX")
+			logger.Println("    To use single language mode, explicitly select 'Single Language' in UI")
+		}
+	}
+	
+	if useMultilingual {
+		logger.Println("Using multilingual intent matching (supports all available languages)")
 		vars.IntentList, _ = vars.LoadMultilingualIntents()
 	} else {
+		logger.Println("Using single language intent matching for language: " + sttLanguage)
 		vars.IntentList, _ = vars.LoadIntents()
 	}
 	

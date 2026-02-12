@@ -42,8 +42,9 @@ type apiConfig struct {
 		Temperature            float32 `json:"temp"`
 	} `json:"knowledge"`
 	STT struct {
-		Service  string `json:"provider"`
-		Language string `json:"language"`
+		Service            string `json:"provider"`
+		Language           string `json:"language"`
+		IntentMatchingMode string `json:"intent_matching_mode"` // "single" or "multilingual"
 	} `json:"STT"`
 	Server struct {
 		// false for ip, true for escape pod
@@ -142,9 +143,10 @@ func ReadConfig() {
 			APIConfig.Server.EPConfig = true
 			APIConfig.Server.Port = "443"
 			
-			// Set Xiaozhi as default STT service
-			APIConfig.STT.Service = "xiaozhi"
-			APIConfig.STT.Language = "vi-VN" // Default to Vietnamese, can be changed later
+		// Set Xiaozhi as default STT service
+		APIConfig.STT.Service = "xiaozhi"
+		APIConfig.STT.Language = "vi-VN"                 // Default to Vietnamese, can be changed later
+		APIConfig.STT.IntentMatchingMode = "multilingual" // Default to multilingual for better UX
 			
 			// Mark initial setup as complete to skip initial.html
 			APIConfig.PastInitialSetup = true

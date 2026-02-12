@@ -613,9 +613,11 @@ function checkSTTProvider() {
 function setSTTLanguage() {
   const provider = getE("sttProvider").value;
   const language = getE("languageSelection").value;
+  const intentMatchingMode = getE("intentMatchingMode").value;
   const data = { 
     provider: provider,
-    language: language 
+    language: language,
+    intent_matching_mode: intentMatchingMode
   };
 
   displayMessage("languageStatus", "Setting...");
@@ -817,6 +819,14 @@ function updateSTTInfo() {
       // Set language
       if (parsed.language) {
         getE("languageSelection").value = parsed.language;
+      }
+      
+      // Set intent matching mode
+      if (parsed.intent_matching_mode) {
+        getE("intentMatchingMode").value = parsed.intent_matching_mode;
+      } else {
+        // Default to single language
+        getE("intentMatchingMode").value = "single";
       }
       
       // Update UI based on provider

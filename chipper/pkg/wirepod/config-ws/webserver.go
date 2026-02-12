@@ -747,8 +747,9 @@ func handleGetKGAPI(w http.ResponseWriter) {
 
 func handleSetSTTInfo(w http.ResponseWriter, r *http.Request) {
 	var request struct {
-		Provider string `json:"provider"`
-		Language string `json:"language"`
+		Provider           string `json:"provider"`
+		Language           string `json:"language"`
+		IntentMatchingMode string `json:"intent_matching_mode"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
@@ -758,6 +759,14 @@ func handleSetSTTInfo(w http.ResponseWriter, r *http.Request) {
 	// Set provider if provided
 	if request.Provider != "" {
 		vars.APIConfig.STT.Service = request.Provider
+	}
+	
+	// Set intent matching mode if provided
+	if request.IntentMatchingMode != "" {
+		vars.APIConfig.STT.IntentMatchingMode = request.IntentMatchingMode
+	} else {
+		// Default to single if not provided
+		vars.APIConfig.STT.IntentMatchingMode = "single"
 	}
 
 	if vars.APIConfig.STT.Service == "vosk" {

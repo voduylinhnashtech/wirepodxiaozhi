@@ -360,6 +360,15 @@
           </div>
           <div>
             <hr class="small-hr">
+            <label for="intentMatchingMode">Intent Matching Mode:</label>
+            <select name="intentMatchingMode" id="intentMatchingMode">
+              <option value="single">Single Language (match selected language only)</option>
+              <option value="multilingual">Multilingual (match all available languages)</option>
+            </select>
+            <small class="desc">Single language mode matches intents only in the selected language. Multilingual mode allows Vector to understand commands in all available languages (English, Vietnamese, Chinese, Spanish, etc.).</small>
+          </div>
+          <div>
+            <hr class="small-hr">
             <button onclick="setSTTLanguage()">
               Set STT Provider & Language
             </button>
