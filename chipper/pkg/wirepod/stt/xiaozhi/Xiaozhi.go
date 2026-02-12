@@ -773,16 +773,10 @@ func STT(sreq sr.SpeechRequest) (string, error) {
 	// Note: Python client gửi audio streaming liên tục, nhưng Go tích lũy và gửi sau end-of-speech
 	// để phù hợp với Vector robot behavior (giống Vosk STT)
 	go func() {
-		defer func() {
-			// Close channels when done
-			defer func() {
-				if r := recover(); r != nil {
-					logger.Println(fmt.Sprintf("Xiaozhi STT: Recovered from panic while closing channels: %v", r))
-				}
-			}()
-			close(transcriptChan)
-			close(errChan)
-		}()
+		// IMPORTANT: Do NOT close transcriptChan/errChan here!
+		// Main function is still waiting to read from these channels.
+		// Closing them causes "nil" error to be read from errChan (closed channel returns zero value).
+		// Channels will be GC'd when main function returns.
 
 		listenStopSent := false // Flag để đảm bảo chỉ gửi listen stop event một lần
 		sendListenStop := func(reason string) {
@@ -1301,7 +1295,19 @@ func STT(sreq sr.SpeechRequest) (string, error) {
 	defer timeout.Stop()
 	for {
 		select {
-		case transcript := <-transcriptChan:
+		case transcript, ok := <-transcriptChan:
+			// Check if channel was closed (should not happen, but handle it safely)
+			if !ok {
+				safeLog("Xiaozhi STT: ⚠️  transcriptChan was closed unexpectedly, treating as timeout")
+				// Treat as timeout, close connection
+				if deviceID != "" {
+					xiaozhi.CloseConnection(deviceID)
+				} else if conn != nil {
+					conn.Close()
+				}
+				return "", fmt.Errorf("transcript channel closed unexpectedly")
+			}
+
 			// CRITICAL: Ignore empty transcripts and keep waiting.
 			// Upstream can emit empty stt events or our internal cancel paths can push "".
 			// Returning early here causes "no STT" on subsequent attempts.
@@ -1342,12 +1348,23 @@ func STT(sreq sr.SpeechRequest) (string, error) {
 			}
 			return transcript, nil
 
-		case err := <-errChan:
-			// Check if error is "DeadlineExceeded" or "context canceled" - treat as empty transcript, don't close connection
-			errStr := ""
-			if err != nil {
-				errStr = err.Error()
+		case err, ok := <-errChan:
+			// Check if channel was closed (should not happen, but handle it safely)
+			if !ok {
+				safeLog("Xiaozhi STT: ⚠️  errChan was closed unexpectedly, continuing to wait for transcript")
+				// Don't treat closed errChan as error - just ignore it and keep waiting for transcript
+				continue
 			}
+
+			// Check if error is nil (should not happen if we use channels correctly)
+			if err == nil {
+				safeLog("Xiaozhi STT: ⚠️  Received nil error from errChan (ignoring), continuing to wait for transcript")
+				// Don't treat nil error as real error - just ignore and keep waiting
+				continue
+			}
+
+			// Check if error is "DeadlineExceeded" or "context canceled" - treat as empty transcript, don't close connection
+			errStr := err.Error()
 			if strings.Contains(errStr, "DeadlineExceeded") || strings.Contains(errStr, "deadline exceeded") || strings.Contains(errStr, "context canceled") || strings.Contains(errStr, "Canceled") {
 				safeLog("Xiaozhi STT: ⚠️  DeadlineExceeded/context canceled for device %s: %v - returning empty transcript, keeping connection", sreq.Device, err)
 				// Don't close connection - let it be reused for next request
