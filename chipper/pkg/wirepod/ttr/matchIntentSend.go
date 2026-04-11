@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	pb "github.com/digital-dream-labs/api/go/chipperpb"
 	"github.com/kercre123/wire-pod/chipper/pkg/logger"
@@ -17,6 +19,25 @@ import (
 type systemIntentResponseStruct struct {
 	Status       string `json:"status"`
 	ReturnIntent string `json:"returnIntent"`
+}
+
+// keyphraseMatchesPartial avoids false positives when multilingual intents merge short keyphrases:
+// e.g. pl-PL affirmative uses "ta"/"tak" for "yes" — substring "ta" must not match inside "take" in "take a photo".
+// Phrases with ≤4 runes use whole-word matching; longer phrases use substring contains.
+func keyphraseMatchesPartial(voiceText, keyphrase string) bool {
+	k := strings.ToLower(strings.TrimSpace(keyphrase))
+	if k == "" {
+		return false
+	}
+	// Short tokens: whole-word only (avoids pl "ta"/"tak", it "si", etc. inside longer English words).
+	if utf8.RuneCountInString(k) <= 4 {
+		re, err := regexp.Compile(`(?i)\b` + regexp.QuoteMeta(k) + `\b`)
+		if err != nil {
+			return strings.Contains(voiceText, k)
+		}
+		return re.MatchString(voiceText)
+	}
+	return strings.Contains(voiceText, k)
 }
 
 func IntentPass(req interface{}, intentThing string, speechText string, intentParams map[string]string, isParam bool) (interface{}, error) {
@@ -255,7 +276,6 @@ func ProcessTextAll(req interface{}, voiceText string, intents []vars.JsonIntent
 		botSerial = req3.Device
 	}
 	var matched int = 0
-	var intentNum int = 0
 	var successMatched bool = false
 	voiceText = strings.ToLower(voiceText)
 	pluginMatched := pluginFunctionHandler(req, voiceText, botSerial)
@@ -281,31 +301,39 @@ func ProcessTextAll(req interface{}, voiceText string, intents []vars.JsonIntent
 				matched = 0
 				break
 			}
-			intentNum = intentNum + 1
 		}
-		// Not found? Then let's be happy with a bare substring search
+		// Partial match: pick the single best hit — longest keyphrase wins (more specific beats vague).
 		if !successMatched {
-			intentNum = 0
-			matched = 0
+			var bestIntent vars.JsonIntent
+			var bestPhrase string
+			var bestLen int
+			found := false
 			for _, b := range intents {
+				if b.RequireExactMatch {
+					continue
+				}
 				for _, c := range b.Keyphrases {
-					if strings.Contains(voiceText, strings.ToLower(c)) && !b.RequireExactMatch {
-						logger.Println("Bot " + botSerial + " Partial match for intent " + b.Name + " (" + strings.ToLower(c) + ")")
-						if isOpus {
-							ParamChecker(req, b.Name, voiceText, botSerial)
-						} else {
-							prehistoricParamChecker(req, b.Name, voiceText)
-						}
-						successMatched = true
-						matched = 1
-						break
+					if !keyphraseMatchesPartial(voiceText, c) {
+						continue
+					}
+					k := strings.TrimSpace(c)
+					l := utf8.RuneCountInString(k)
+					if !found || l > bestLen {
+						found = true
+						bestLen = l
+						bestIntent = b
+						bestPhrase = c
 					}
 				}
-				if matched == 1 {
-					matched = 0
-					break
+			}
+			if found {
+				logger.Println("Bot " + botSerial + " Partial match (longest keyphrase, len=" + fmt.Sprint(bestLen) + ") for intent " + bestIntent.Name + " (" + strings.ToLower(bestPhrase) + ")")
+				if isOpus {
+					ParamChecker(req, bestIntent.Name, voiceText, botSerial)
+				} else {
+					prehistoricParamChecker(req, bestIntent.Name, voiceText)
 				}
-				intentNum = intentNum + 1
+				successMatched = true
 			}
 		}
 	} else {

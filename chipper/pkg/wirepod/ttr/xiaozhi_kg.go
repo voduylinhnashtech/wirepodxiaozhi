@@ -31,8 +31,54 @@ const (
 	// This matches the OpenAI TTS path in this repo and tends to be more reliable than 8kHz on some builds.
 	vectorAudioFrameRate = 16000
 	vectorAudioVolume    = 80
-	vectorChunkPace      = 25 * time.Millisecond
+	// Default chunk pacing (~25ms). One 1024-byte 16kHz mono chunk ≈ 32ms of audio;
+	// slightly faster pacing helps keep the robot's buffer fed. On slow/loaded hosts
+	// (e.g. TV boxes) scheduler jitter can make sleeps irregular — override with
+	// XIAOZHI_VECTOR_CHUNK_PACE_MS (e.g. 32–40) to align closer to real-time and reduce stutter.
+	vectorChunkPaceDefault = 25 * time.Millisecond
 )
+
+// getVectorChunkPace returns delay between ExternalAudioStream chunks sent to the robot.
+// Set XIAOZHI_VECTOR_CHUNK_PACE_MS to an integer in milliseconds (10–150; empty = default 25).
+var getVectorChunkPace = sync.OnceValue(func() time.Duration {
+	v := strings.TrimSpace(os.Getenv("XIAOZHI_VECTOR_CHUNK_PACE_MS"))
+	if v == "" {
+		return vectorChunkPaceDefault
+	}
+	ms, err := strconv.Atoi(v)
+	if err != nil || ms < 10 || ms > 150 {
+		return vectorChunkPaceDefault
+	}
+	return time.Duration(ms) * time.Millisecond
+})
+
+// getKGLLMResponseTimeout is how long we wait for the first LLM text (llm or tts sentence_start)
+// before failing with "timeout waiting for response" → robot says to check web logs.
+// Override with XIAOZHI_KG_LLM_TIMEOUT_SEC (15–180, empty = 30). Increase on slow networks or busy servers.
+var getKGLLMResponseTimeout = sync.OnceValue(func() time.Duration {
+	v := strings.TrimSpace(os.Getenv("XIAOZHI_KG_LLM_TIMEOUT_SEC"))
+	if v == "" {
+		return 30 * time.Second
+	}
+	sec, err := strconv.Atoi(v)
+	if err != nil || sec < 15 || sec > 180 {
+		return 30 * time.Second
+	}
+	return time.Duration(sec) * time.Second
+})
+
+// After replyStarted (tts/audio), optional wait for text for logging/return value (ESP32 may stream audio first).
+var getKGTextAfterAudioTimeout = sync.OnceValue(func() time.Duration {
+	v := strings.TrimSpace(os.Getenv("XIAOZHI_KG_TEXT_AFTER_AUDIO_SEC"))
+	if v == "" {
+		return 90 * time.Second
+	}
+	sec, err := strconv.Atoi(v)
+	if err != nil || sec < 5 || sec > 300 {
+		return 90 * time.Second
+	}
+	return time.Duration(sec) * time.Second
+})
 
 func xiaozhiDebugAudio() bool {
 	return os.Getenv("XIAOZHI_DEBUG_AUDIO") == "1"
@@ -171,8 +217,11 @@ type LLMHandler struct {
 	lastFrameTime           time.Time // Track when last audio frame was received
 	esn                     string    // Robot ESN for checking first audio playback
 	websocketReconnected    bool      // Flag to indicate websocket was reconnected (for first chunk delay)
-	mu                      sync.RWMutex
-	sendMu                  sync.Mutex // Mutex to serialize vclient.Send() calls (gRPC streams are not thread-safe)
+	// longPostPrepareWait is set when StreamingXiaozhiKG already slept ≥1200ms after AudioStreamPrepare.
+	// In that case an extra long pause after the first 1024-byte chunk creates a gap (robot buffer drains → missing/cut start).
+	longPostPrepareWait bool
+	mu                  sync.RWMutex
+	sendMu              sync.Mutex // Mutex to serialize vclient.Send() calls (gRPC streams are not thread-safe)
 	// Audio processing (synchronous)
 	vclient interface {
 		Send(*vectorpb.ExternalAudioStreamRequest) error
@@ -189,6 +238,24 @@ type LLMHandler struct {
 	healthCheckStop          chan bool // Signal to stop health check
 	lastHealthCheck          time.Time // Track last health check time
 	chunksSentSinceLastCheck int       // Track chunks sent since last health check
+	// replyStarted signals that the server began answering (tts start, first audio, or llm text).
+	// ESP32 streams audio without requiring a text event first; wire-pod used to wait only on
+	// textResponse and timed out. Merged with textResponse in StreamingXiaozhiKG select.
+	replyStarted     chan struct{}
+	replyStartedOnce sync.Once
+}
+
+// signalReplyStarted fires once when TTS/audio/text pipeline has visibly started (xiaozhi-esp32 style).
+func (h *LLMHandler) signalReplyStarted() {
+	if h == nil || h.replyStarted == nil {
+		return
+	}
+	h.replyStartedOnce.Do(func() {
+		select {
+		case h.replyStarted <- struct{}{}:
+		default:
+		}
+	})
 }
 
 func padToMultiple(b []byte, multiple int) []byte {
@@ -235,6 +302,7 @@ func (h *LLMHandler) HandleMessage(messageType int, message []byte) error {
 				select {
 				case h.textResponse <- text:
 					logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] ✅ LLM text sent to channel: '%s'", text))
+					h.signalReplyStarted()
 				default:
 					logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] ⚠️  textResponse channel is full, dropping text"))
 				}
@@ -258,6 +326,8 @@ func (h *LLMHandler) HandleMessage(messageType int, message []byte) error {
 					h.audioFinalized = false
 					h.mu.Unlock()
 					logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] ✅ TTS started, ready to receive Opus frames"))
+					// ESP32-style: server may stream audio before any llm text — unblock KG wait.
+					h.signalReplyStarted()
 				} else if state == "sentence_start" {
 					// TTS sentence_start contains the full text response (priority over LLM event)
 					if text, ok := event["text"].(string); ok && text != "" {
@@ -265,6 +335,7 @@ func (h *LLMHandler) HandleMessage(messageType int, message []byte) error {
 						select {
 						case h.textResponse <- text:
 							logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] ✅ TTS sentence_start text sent to channel: '%s'", text))
+							h.signalReplyStarted()
 						default:
 							logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] ⚠️  textResponse channel is full, dropping text"))
 						}
@@ -388,6 +459,8 @@ func (h *LLMHandler) HandleMessage(messageType int, message []byte) error {
 			}
 			return nil
 		}
+		// First playable PCM after decode: server may send binary before tts/llm text (ESP32-style).
+		h.signalReplyStarted()
 
 		// Log downsample success for first few frames
 		if count <= 5 {
@@ -415,10 +488,6 @@ func (h *LLMHandler) HandleMessage(messageType int, message []byte) error {
 		// Khác biệt: Play Audio chia file trước, code này accumulate buffer real-time
 		// nhưng vẫn ưu tiên gửi chunk 1024 bytes khi buffer đủ lớn
 		chunksSentInFrame := 0
-		bufferSizeBeforeSend := len(accumulatedBuffer)
-		if count <= 5 {
-			logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] 🔄 Attempting to send chunks: buffer size=%d bytes, vclient=%v", bufferSizeBeforeSend, vclient != nil))
-		}
 		// CRITICAL: Lock only when needed, unlock before sending to avoid deadlock
 		h.mu.Lock()
 		for len(accumulatedBuffer) >= vectorAudioChunkBytes {
@@ -431,9 +500,7 @@ func (h *LLMHandler) HandleMessage(messageType int, message []byte) error {
 
 			// Send to robot (same pattern as Play Audio)
 			// Add retry logic like OpenAI TTS to ensure audio is always sent
-			if count <= 5 {
-				logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] 📤 Sending chunk: size=%d bytes, vclient=%v", len(chunkToSend), vclient != nil))
-			}
+			// No per-chunk success logs here — logging synchronously can jitter audio on slow hosts.
 			if xiaozhiDebugAudio() && (count <= 5) {
 				peakAbs, avgAbs := pcmAbsStats16LE(chunkToSend)
 				logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] 🔎 PCM stats (16LE): peakAbs=%d avgAbs=%d (chunkBytes=%d, frame#=%d)", peakAbs, avgAbs, len(chunkToSend), count))
@@ -446,11 +513,6 @@ func (h *LLMHandler) HandleMessage(messageType int, message []byte) error {
 					err = fmt.Errorf("vclient is nil")
 					logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] ⚠️  ERROR - vclient is nil, cannot send chunk"))
 					break
-				}
-
-				// Log before Send to track if it blocks
-				if count <= 5 || retry == 0 {
-					logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] 🔵 Calling vclient.Send() (retry %d/%d)...", retry+1, maxRetries))
 				}
 
 				// CRITICAL: Use sendMu to serialize vclient.Send() calls (gRPC streams are not thread-safe)
@@ -475,38 +537,19 @@ func (h *LLMHandler) HandleMessage(messageType int, message []byte) error {
 				}()
 				h.sendMu.Unlock() // Always unlock after Send() completes (success or error)
 
-				// Log after Send to track completion
-				if count <= 5 || retry == 0 {
-					if err == nil {
-						logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] 🟢 vclient.Send() completed successfully"))
-					} else {
-						logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] 🔴 vclient.Send() returned error: %v", err))
-					}
+				if err != nil {
+					logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] 🔴 vclient.Send() returned error: %v", err))
 				}
 
 				if err == nil {
 					// Success - break retry loop
-					if count <= 5 {
-						logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] 🟡 vclient.Send() succeeded, updating counters..."))
-					}
 					chunksSentInFrame++
 					// IMPORTANT: Update chunkCount when sending chunks directly (not via flush timer)
 					// Lock is already released above, so we can lock again safely
 					h.mu.Lock()
-					if count <= 5 {
-						logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] 🟡 Lock acquired, updating chunkCount..."))
-					}
 					h.chunkCount++
 					h.chunksSentSinceLastCheck++
-					chunkCount := h.chunkCount
 					h.mu.Unlock()
-					if count <= 5 {
-						logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] 🟡 Lock released, chunkCount=%d", chunkCount))
-					}
-					logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] ✅ Sent audio chunk #%d (%d bytes) to robot (from frame #%d, total chunks: %d)", chunksSentInFrame, len(chunkToSend), count, chunkCount))
-					if count <= 5 {
-						logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] 🟡 Breaking retry loop..."))
-					}
 					// Re-lock to update buffer for next iteration (don't break yet, continue loop)
 					h.mu.Lock()
 					h.accumulatedBuffer = accumulatedBuffer
@@ -516,13 +559,10 @@ func (h *LLMHandler) HandleMessage(messageType int, message []byte) error {
 					// Break retry loop, continue to next chunk if buffer >= vectorAudioChunkBytes
 					break
 				} else {
-					// Always log errors for first few frames
-					if count <= 5 || retry == 0 {
-						logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] ⚠️  Error sending chunk (retry %d/%d): %v", retry+1, maxRetries, err))
-					}
+					logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] ⚠️  Error sending chunk (retry %d/%d): %v", retry+1, maxRetries, err))
 				}
 				// If error is EOF/closed, don't retry
-				if strings.Contains(err.Error(), "EOF") || strings.Contains(err.Error(), "closed") {
+				if err != nil && (strings.Contains(err.Error(), "EOF") || strings.Contains(err.Error(), "closed")) {
 					logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] ⚠️  ERROR - Failed to send audio chunk (stream closed): %v", err))
 					// Lock is already released, so we can lock again safely
 					h.mu.Lock()
@@ -558,33 +598,26 @@ func (h *LLMHandler) HandleMessage(messageType int, message []byte) error {
 			h.accumulatedBuffer = accumulatedBuffer
 			chunkCount := h.chunkCount
 			h.mu.Unlock()
-			if chunkCount == 1 || chunkCount%50 == 0 {
-				logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] ✅ Sent audio chunk #%d (%d bytes) to robot", chunkCount, len(chunkToSend)))
-			}
-			// CRITICAL: Longer delay for first chunk ONLY on first audio playback
-			// This fixes "first TTS doesn't play, second TTS works" issue
-			// Robot needs extra time after receiving first chunk to start audio playback (only on first use)
-			// After first playback, robot is already warm, so normal delay is sufficient
-			// After first chunk of each session, use normal 60ms delay (giống Play Audio - /api-sdk/play_sound)
+			// Delay after chunk 1 before chunk 2: must not add a huge gap if we already waited 1200ms+
+			// after AudioStreamPrepare (longPostPrepareWait) — that caused audible dropout at TTS start.
 			if chunkCount == 1 {
 				h.mu.RLock()
 				esn := h.esn
+				longPostPrepare := h.longPostPrepareWait
 				h.mu.RUnlock()
-				// CRITICAL: Audio pipeline is always open and warm (independent of websocket)
-				// Delay is only needed for robot to start audio playback, not for pipeline warm-up
-				// Since pipeline is always warm, we can use minimal delay
-				isFirstAudio := !hasRobotPlayedAudio(esn)
-				if isFirstAudio {
-					// First audio ever - robot needs time to initialize audio playback
-					time.Sleep(time.Millisecond * 300) // Minimal delay for first audio (pipeline is warm, only robot initialization)
-					logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] ⏱️  First chunk sent (FIRST audio ever), waiting 300ms for robot audio initialization (pipeline already warm)"))
-				} else {
-					// Robot has played before - pipeline is warm, minimal delay needed
-					time.Sleep(time.Millisecond * 50) // Minimal delay - pipeline is warm, only need time for robot to start playback
-					logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] ⏱️  First chunk sent (pipeline always warm), waiting 50ms for robot to start playback"))
+				switch {
+				case longPostPrepare:
+					// Prepare already included a long robot warm-up; use normal pacing only.
+					d := getVectorChunkPace()
+					time.Sleep(d)
+				case hasRobotPlayedAudio(esn):
+					time.Sleep(50 * time.Millisecond)
+				default:
+					// Short Prepare (e.g. 50ms) + first conversation ever: brief settle only (was 300ms → gap/cut start).
+					time.Sleep(100 * time.Millisecond)
 				}
 			} else {
-				time.Sleep(vectorChunkPace) // Normal delay for subsequent chunks
+				time.Sleep(getVectorChunkPace()) // Normal delay for subsequent chunks
 			}
 			// Re-lock for next iteration
 			h.mu.Lock()
@@ -594,8 +627,7 @@ func (h *LLMHandler) HandleMessage(messageType int, message []byte) error {
 		h.accumulatedBuffer = accumulatedBuffer
 		h.mu.Unlock()
 
-		// Log first few frames and then every 10th frame to track audio processing
-		if count <= 5 || count%10 == 0 {
+		if xiaozhiDebugAudio() && (count <= 5 || count%10 == 0) {
 			logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] ✅ Opus frame #%d processed (%d bytes) - sent %d chunks immediately, buffer size: %d bytes", count, len(message), chunksSentInFrame, len(accumulatedBuffer)))
 			if chunksSentInFrame == 0 && len(accumulatedBuffer) >= vectorAudioChunkBytes {
 				logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] ⚠️  WARNING - Buffer >= %d but no chunks sent! vclient=%v", vectorAudioChunkBytes, vclient != nil))
@@ -954,6 +986,17 @@ func StreamingXiaozhiKG(esn string, transcribedText string, isKG bool, isConvers
 		chunkCount:              0,
 		audioQueueStarted:       false,
 		esn:                     esn, // Store ESN for checking first audio playback
+		replyStarted:            make(chan struct{}, 1),
+	}
+
+	// CRITICAL: Register LLM handler BEFORE Vector audio setup, WaitForAudio_Queue, and text query.
+	// After STT sends listen stop, the server may stream tts/llm/binary immediately; if we only
+	// called SetLLMHandler after audio Prepare + queue waits, ConnectionManager had LLMHandler=nil
+	// and dropped all frames ("no LLM handler is set").
+	if deviceID != "" {
+		llmHandler.SetActive(true)
+		xiaozhi.SetLLMHandler(deviceID, llmHandler)
+		logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ✅ LLM handler registered EARLY (before Vector audio / queue) for deviceID: %s", esn, deviceID))
 	}
 
 	// CRITICAL: Setup audio BEFORE sending text query
@@ -1097,11 +1140,13 @@ func StreamingXiaozhiKG(esn string, transcribedText string, isKG bool, isConvers
 							// Use longer delay (similar to new client after reconnect) to ensure audio plays correctly
 							logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ✅ AudioStreamPrepare sent on reused client (%dkHz, volume %d) - stream is valid, BUT websocket reconnected, using longer delay", esn, vectorAudioFrameRate/1000, vectorAudioVolume))
 							time.Sleep(time.Millisecond * 1200) // Longer delay when websocket reconnects (similar to new client)
+							llmHandler.longPostPrepareWait = true
 							logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ✅ Delay after AudioStreamPrepare completed (1200ms - websocket reconnected, robot needs time to process)", esn))
 						} else {
 							// Normal reuse - pipeline is warm, minimal delay needed
 							logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ✅ AudioStreamPrepare sent on reused client (%dkHz, volume %d) - stream is valid, pipeline is warm", esn, vectorAudioFrameRate/1000, vectorAudioVolume))
 							time.Sleep(time.Millisecond * 50) // Minimal delay - pipeline is warm, only need time for robot to process Prepare
+							llmHandler.longPostPrepareWait = false
 							logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ✅ Delay after AudioStreamPrepare completed (50ms - pipeline always warm, only robot processing time)", esn))
 						}
 					}
@@ -1154,12 +1199,14 @@ func StreamingXiaozhiKG(esn string, transcribedText string, isKG bool, isConvers
 					isFirstAudio := !hasRobotPlayedAudio(esn)
 					if isFirstAudio {
 						time.Sleep(time.Millisecond * 1500) // Longer delay for first audio ever (robot warm-up) - increased from 1000ms to 1500ms
+						llmHandler.longPostPrepareWait = true
 						logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ✅ Delay after AudioStreamPrepare completed (1500ms for FIRST audio ever - robot warm-up)", esn))
 					} else {
 						// Robot has played audio before, but this is a NEW client (pool was empty or old client failed)
 						// After websocket close/reconnect, robot needs time to reset audio pipeline for new stream
 						// Increased from 500ms to 1200ms to ensure robot is ready for new stream
 						time.Sleep(time.Millisecond * 1200) // Longer delay for new client after websocket reconnect (new stream needs time)
+						llmHandler.longPostPrepareWait = true
 						logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ✅ Delay after AudioStreamPrepare completed (1200ms for new client after reconnect - new stream needs time)", esn))
 					}
 
@@ -1290,7 +1337,7 @@ func StreamingXiaozhiKG(esn string, transcribedText string, isKG bool, isConvers
 										break
 									}
 									sentFinal++
-									time.Sleep(vectorChunkPace)
+									time.Sleep(getVectorChunkPace())
 								}
 								llmHandler.mu.Lock()
 								llmHandler.accumulatedBuffer = []byte{}
@@ -1365,7 +1412,7 @@ func StreamingXiaozhiKG(esn string, transcribedText string, isKG bool, isConvers
 										logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] ⚠️  Failed to flush final chunk on stop: %v", err))
 										break
 									}
-									time.Sleep(vectorChunkPace)
+									time.Sleep(getVectorChunkPace())
 								}
 							}
 
@@ -1527,60 +1574,36 @@ func StreamingXiaozhiKG(esn string, transcribedText string, isKG bool, isConvers
 		}
 	}
 
-	// CRITICAL: Register LLM handler BEFORE sending text query
-	// Server may send llm/tts messages immediately after receiving text query
-	// Handler must be ready to receive these messages
+	// Verify LLM handler still registered after audio setup (registered early above).
 	if deviceID != "" {
-		logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | 🔍 Registering LLM handler for deviceID: %s (connection should exist from STT)", esn, deviceID))
-
-		// Register handler with audio already setup
-		llmHandler.SetActive(true)
-		xiaozhi.SetLLMHandler(deviceID, llmHandler)
-		logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ✅ SetLLMHandler called for deviceID: %s", esn, deviceID))
-
-		// CRITICAL: Verify handler was set correctly with retry
-		// Sometimes connection manager needs a moment to update
 		maxRetries := 5
 		handlerVerified := false
 		for i := 0; i < maxRetries; i++ {
 			verifyHandler := xiaozhi.GetLLMHandler(deviceID)
 			if verifyHandler != nil && verifyHandler.IsActive() {
 				handlerVerified = true
-				logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ✅ LLM handler registered and VERIFIED active BEFORE text query (audio ready: %v, retry: %d/%d)", esn, vclient != nil && audioPrepareSent, i+1, maxRetries))
+				logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ✅ LLM handler verified BEFORE text query (audio ready: %v, retry: %d/%d)", esn, vclient != nil && audioPrepareSent, i+1, maxRetries))
 				break
 			}
 			logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ⚠️  Handler verification failed (retry %d/%d): handler=%v, active=%v", esn, i+1, maxRetries, verifyHandler != nil, verifyHandler != nil && verifyHandler.IsActive()))
 			if i < maxRetries-1 {
-				// Wait a bit and retry
 				time.Sleep(20 * time.Millisecond)
-				// Try to set again
 				llmHandler.SetActive(true)
 				xiaozhi.SetLLMHandler(deviceID, llmHandler)
-				logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | 🔄 Retrying SetLLMHandler (retry %d/%d)", esn, i+1, maxRetries))
 			}
 		}
-
 		if !handlerVerified {
-			logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ⚠️  WARNING - LLM handler NOT verified after %d retries! This may cause llm/tts messages to be ignored!", esn, maxRetries))
-			// Last attempt: force activate
 			verifyHandler := xiaozhi.GetLLMHandler(deviceID)
 			if verifyHandler != nil {
 				verifyHandler.SetActive(true)
 				logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ✅ LLM handler force-activated as last resort", esn))
 			} else {
-				logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ❌ ERROR - LLM handler is nil! Connection may not exist in manager for deviceID: %s", esn, deviceID))
-				// CRITICAL: If handler is nil, connection doesn't exist - cannot proceed
-				// This should not happen if connection was reused from STT
+				logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ❌ ERROR - LLM handler is nil before text query for deviceID: %s", esn, deviceID))
 				return "", fmt.Errorf("LLM handler is nil - connection may not exist in manager for deviceID: %s", deviceID)
 			}
 		}
-
-		// CRITICAL: Small delay after handler verification to ensure connection manager has fully updated
-		// This prevents race condition where text query is sent before handler is fully registered
-		if handlerVerified {
-			time.Sleep(50 * time.Millisecond)
-			logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ✅ Handler verified, waiting 50ms for connection manager to fully update before sending text query", esn))
-		}
+		time.Sleep(50 * time.Millisecond)
+		logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ✅ Ready to send text query", esn))
 	} else {
 		logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ⚠️  WARNING - deviceID is empty, cannot register LLM handler! This will cause llm/tts messages to be ignored!", esn))
 	}
@@ -1827,116 +1850,41 @@ func StreamingXiaozhiKG(esn string, transcribedText string, isKG bool, isConvers
 				fmt.Fprintf(os.Stderr, "[Xiaozhi KG] PANIC in logger (recovered): %v\n", r)
 			}
 		}()
-		logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ⏳ Waiting for LLM response (timeout: 30s)...", esn))
+		logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ⏳ Waiting for upstream reply (text or tts/audio, timeout: %v; ESP32-style)...", esn, getKGLLMResponseTimeout()))
 	}()
+	var text string
 	select {
-	case text := <-textResponse:
-		// Ensure text is not nil/empty to avoid issues
+	case text = <-textResponse:
 		if text == "" {
 			text = "(empty response)"
 		}
-		// Use recover to prevent panic from logger
-		func() {
-			defer func() {
-				if r := recover(); r != nil {
-					// Log to stderr directly to avoid logger issues
-					fmt.Fprintf(os.Stderr, "[Xiaozhi KG] PANIC in logger (recovered): %v, esn: %s, text: %s\n", r, esn, text)
-				}
-			}()
-			logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ========== LLM TEXT RESPONSE RECEIVED ==========", esn))
-			logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ✅ LLM response text: '%s'", esn, text))
-			logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | Text length: %d bytes", esn, len(text)))
-			logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | Text will be returned to caller", esn))
-			logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ==============================================", esn))
-		}()
-
-		// Wait for TTS stop event before releasing connection
-		// Audio processing is now synchronous (handled directly in LLM handler), so we just wait for TTS stop
-		// Keep WebSocket reader goroutine running continuously (like xiaozhi-esp32-main)
-		if connFromSTT {
-			// If continuous conversation is enabled, connection will be released in DoNewRequest goroutine
-			// Otherwise, release it here after TTS stops
-			if !shouldContinueConversation {
-				logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ⏳ Waiting for TTS stop event before releasing connection...", esn))
-				// Wait for TTS stop event (audio processing is synchronous, so it's already done when TTS stops)
-				select {
-				case <-ttsStopChan:
-					logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ✅ TTS stop event received, audio processing completed (synchronous)", esn))
-					// Wait a bit for WebSocket reader goroutine to process remaining messages
-					logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ⏳ Waiting a bit more for server to send any remaining messages...", esn))
-					time.Sleep(2 * time.Second) // Reduced wait time
-					// Deactivate LLM handler - connection manager's reader will route messages to STT handler
-					if deviceID != "" {
-						llmHandler.SetActive(false)
-						logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ✅ LLM handler deactivated (connection manager will route to STT handler)", esn))
-					}
-					// Release connection (don't close it) so STT can reuse for next request
-					if deviceID != "" {
-						xiaozhi.ReleaseConnection(deviceID)
-						logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ✅ Connection released (STT handler will handle next request)", esn))
-					}
-				case <-time.After(24 * time.Hour):
-					// Timeout rất dài (24 giờ) - thực tế không bao giờ timeout
-					// Chỉ để tránh goroutine chạy mãi mãi nếu có lỗi
-					logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ⚠️  Very long timeout reached (24h), releasing connection anyway", esn))
-					// Deactivate LLM handler - connection manager's reader will route messages to STT handler
-					if deviceID != "" {
-						llmHandler.SetActive(false)
-						logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ✅ LLM handler deactivated (connection manager will route to STT handler)", esn))
-					}
-					// Release connection (don't close it) so STT can reuse for next request
-					if deviceID != "" {
-						xiaozhi.ReleaseConnection(deviceID)
-						logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ✅ Connection released (STT handler will handle next request)", esn))
-					}
-				}
-			} else {
-				// Continuous conversation enabled - connection is released IMMEDIATELY after TTS stop in goroutine
-				// Don't wait here because ttsStopChan is already consumed by DoNewRequest goroutine
-				// The goroutine handles: TTS stop → Release connection → Activate STT → DoNewRequest
-				logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ✅ Continuous conversation enabled - connection release handled by DoNewRequest goroutine (released immediately after TTS stop)", esn))
+	case <-llmHandler.replyStarted:
+		// xiaozhi-esp32: server may send tts start or Opus before any llm text — do not treat as failure.
+		logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ✅ Reply pipeline started (tts/audio before text) — waiting up to %v for optional text...", esn, getKGTextAfterAudioTimeout()))
+		select {
+		case text = <-textResponse:
+			if text == "" {
+				text = "(empty response)"
 			}
-		} else {
-			// For new connections, wait for TTS stop event
-			select {
-			case <-ttsStopChan:
-				logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ✅ TTS stop event received (synchronous audio processing)", esn))
-			case <-time.After(10 * time.Second):
-				logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ⚠️  Timeout waiting for TTS stop (10s), proceeding anyway", esn))
-			}
+		case <-time.After(getKGTextAfterAudioTimeout()):
+			text = ""
 		}
+		if strings.TrimSpace(text) == "" {
+			text = "(streaming)"
+		}
+	case <-time.After(getKGLLMResponseTimeout()):
+		logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ❌ TIMEOUT - No upstream reply (text or tts/audio) after %v (increase XIAOZHI_KG_LLM_TIMEOUT_SEC if needed)", esn, getKGLLMResponseTimeout()))
+		logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | Debug info: textResponse len=%d, errChan len=%d", esn, len(textResponse), len(errChan)))
 
-		// NOTE: Continuous conversation flow (in separate goroutine):
-		// 1. TTS stop event received
-		// 2. Release connection IMMEDIATELY (so STT can use it)
-		// 3. Deactivate LLM handler (connection manager routes to STT handler)
-		// 4. Activate STT handler
-		// 5. Send listen start message to server
-		// 6. Call DoNewRequest to open robot mic
-		// 7. Robot speaks → STT handler uses released connection to send audio
-		// This allows continuous conversation without needing "hey vector" each time
-
-		// Don't cancel audioCtx here - let audio processing goroutine cancel it when done
-		// This prevents vclient stream from closing while audio is still being sent
-		return text, nil
-	case <-time.After(30 * time.Second):
-		logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ❌ TIMEOUT - No LLM response received after 30 seconds", esn))
-		logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | Debug info: textResponse channel length=%d, errChan length=%d", esn, len(textResponse), len(errChan)))
-
-		// IMPORTANT: Deactivate LLM handler and release connection on timeout
-		// This allows STT to reuse the connection for next request
 		if deviceID != "" {
-			// Deactivate LLM handler
 			if connFromSTT {
 				llmHandler.SetActive(false)
 				logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ✅ LLM handler deactivated (timeout case)", esn))
 			}
-			// Release connection so STT can reuse it
 			xiaozhi.ReleaseConnection(deviceID)
 			logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ✅ Connection released (timeout case - STT can reuse)", esn))
 		}
 
-		// Stop audio queue if started
 		llmHandler.mu.Lock()
 		audioQueueStarted := llmHandler.audioQueueStarted
 		llmHandler.mu.Unlock()
@@ -1944,26 +1892,19 @@ func StreamingXiaozhiKG(esn string, transcribedText string, isKG bool, isConvers
 			StopAudio_Queue(esn)
 		}
 
-		// DON'T cancel audioCtx - audio client is in pool and will be reused
-		// audioCancelSafe() // REMOVED - keep pipeline warm
 		return "", fmt.Errorf("timeout waiting for response")
 	case err := <-errChan:
 		logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ❌ Error received from errChan: %v", esn, err))
 
-		// IMPORTANT: Deactivate LLM handler and release connection on error
-		// This allows STT to reuse the connection for next request
 		if deviceID != "" {
-			// Deactivate LLM handler
 			if connFromSTT {
 				llmHandler.SetActive(false)
 				logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ✅ LLM handler deactivated (error case)", esn))
 			}
-			// Release connection so STT can reuse it
 			xiaozhi.ReleaseConnection(deviceID)
 			logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ✅ Connection released (error case - STT can reuse)", esn))
 		}
 
-		// Stop audio queue if started
 		llmHandler.mu.Lock()
 		audioQueueStarted := llmHandler.audioQueueStarted
 		llmHandler.mu.Unlock()
@@ -1971,8 +1912,66 @@ func StreamingXiaozhiKG(esn string, transcribedText string, isKG bool, isConvers
 			StopAudio_Queue(esn)
 		}
 
-		// DON'T cancel audioCtx - audio client is in pool and will be reused
-		// audioCancelSafe() // REMOVED - keep pipeline warm
 		return "", err
 	}
+
+	// Common success path: received text and/or ESP32-style streaming started.
+	// Use recover to prevent panic from logger
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				fmt.Fprintf(os.Stderr, "[Xiaozhi KG] PANIC in logger (recovered): %v, esn: %s, text: %s\n", r, esn, text)
+			}
+		}()
+		logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ========== LLM / upstream RESPONSE OK ==========", esn))
+		logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ✅ Response text for caller: '%s'", esn, text))
+		logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | Text length: %d bytes", esn, len(text)))
+		logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ==============================================", esn))
+	}()
+
+	// Wait for TTS stop event before releasing connection
+	// Audio processing is now synchronous (handled directly in LLM handler), so we just wait for TTS stop
+	// Keep WebSocket reader goroutine running continuously (like xiaozhi-esp32-main)
+	if connFromSTT {
+		// If continuous conversation is enabled, connection will be released in DoNewRequest goroutine
+		// Otherwise, release it here after TTS stops
+		if !shouldContinueConversation {
+			logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ⏳ Waiting for TTS stop event before releasing connection...", esn))
+			select {
+			case <-ttsStopChan:
+				logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ✅ TTS stop event received, audio processing completed (synchronous)", esn))
+				logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ⏳ Waiting a bit more for server to send any remaining messages...", esn))
+				time.Sleep(2 * time.Second)
+				if deviceID != "" {
+					llmHandler.SetActive(false)
+					logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ✅ LLM handler deactivated (connection manager will route to STT handler)", esn))
+				}
+				if deviceID != "" {
+					xiaozhi.ReleaseConnection(deviceID)
+					logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ✅ Connection released (STT handler will handle next request)", esn))
+				}
+			case <-time.After(24 * time.Hour):
+				logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ⚠️  Very long timeout reached (24h), releasing connection anyway", esn))
+				if deviceID != "" {
+					llmHandler.SetActive(false)
+					logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ✅ LLM handler deactivated (connection manager will route to STT handler)", esn))
+				}
+				if deviceID != "" {
+					xiaozhi.ReleaseConnection(deviceID)
+					logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ✅ Connection released (STT handler will handle next request)", esn))
+				}
+			}
+		} else {
+			logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ✅ Continuous conversation enabled - connection release handled by DoNewRequest goroutine (released immediately after TTS stop)", esn))
+		}
+	} else {
+		select {
+		case <-ttsStopChan:
+			logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ✅ TTS stop event received (synchronous audio processing)", esn))
+		case <-time.After(10 * time.Second):
+			logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ⚠️  Timeout waiting for TTS stop (10s), proceeding anyway", esn))
+		}
+	}
+
+	return text, nil
 }

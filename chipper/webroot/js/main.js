@@ -49,13 +49,6 @@ function checkInited() {
     }
   });
 
-  fetch("/api/get_config")
-    .then((response) => response.json())
-    .then((config) => {
-      if (!config.pastinitialsetup) {
-        window.location.href = "/initial.html";
-      }
-    });
 }
 
 function createIntentSelect(element) {
@@ -373,128 +366,57 @@ function generatePairingCodeFromInput() {
   }, 2000);
 }
 
+// Loaded from /api/get_kg_api so Apply does not overwrite openai_voice when the KG UI has no voice control.
+let kgStoredOpenaiVoice = "fable";
+
 function checkKG() {
-  const provider = getE("kgProvider").value;
-  const elements = [
-    "houndifyInput",
-    "togetherInput",
-    "customAIInput",
-    "intentGraphInput",
-    "openAIInput",
-    "xiaozhiInput",
-    "saveChatInput",
-    "llmCommandInput",
-    "openAIVoiceForEnglishInput",
-  ];
-
-  elements.forEach((el) => (getE(el).style.display = "none"));
-
-  if (provider) {
-    if (provider === "houndify") {
-      getE("houndifyInput").style.display = "block";
-      getE("intentGraphInput").style.display = "block";
-    } else if (provider === "openai") {
-      getE("intentGraphInput").style.display = "block";
-      getE("openAIInput").style.display = "block";
-      getE("saveChatInput").style.display = "block";
-      getE("llmCommandInput").style.display = "block";
-      getE("openAIVoiceForEnglishInput").style.display = "block";
-    } else if (provider === "xiaozhi") {
-      getE("intentGraphInput").style.display = "block";
-      getE("xiaozhiInput").style.display = "block";
-      getE("saveChatInput").style.display = "block";
-      getE("xiaozhiDisableIntentInput").style.display = "block";
-      getE("llmCommandInput").style.display = "block";
-      getE("openAIVoiceForEnglishInput").style.display = "block";
-    } else if (provider === "together") {
-      getE("intentGraphInput").style.display = "block";
-      getE("togetherInput").style.display = "block";
-      getE("saveChatInput").style.display = "block";
-      getE("llmCommandInput").style.display = "block";
-    } else if (provider === "custom") {
-      getE("intentGraphInput").style.display = "block";
-      getE("customAIInput").style.display = "block";
-      getE("saveChatInput").style.display = "block";
-      getE("llmCommandInput").style.display = "block";
-    }
-  }
+  getE("xiaozhiInput").style.display = "block";
+  getE("intentGraphInput").style.display = "block";
+  getE("saveChatInput").style.display = "block";
+  getE("xiaozhiDisableIntentInput").style.display = "block";
+  getE("llmCommandInput").style.display = "block";
 }
 
 function sendKGAPIKey() {
-  const provider = getE("kgProvider").value;
   const data = {
     enable: true,
-    provider,
+    provider: "xiaozhi",
     key: "",
     model: "",
     id: "",
     intentgraph: false,
     robotName: "",
     openai_prompt: "",
-    openai_voice: "",
+    openai_voice: kgStoredOpenaiVoice,
     openai_voice_with_english: false,
     save_chat: false,
     commands_enable: false,
     endpoint: "",
     xiaozhi_tts_volume: "normal",
   };
-  if (provider === "openai") {
-    data.key = getE("openaiKey").value;
-    data.openai_prompt = getE("openAIPrompt").value;
-    data.intentgraph = getE("intentyes").checked
-    data.save_chat = getE("saveChatYes").checked
-    data.commands_enable = getE("commandYes").checked
-    data.openai_voice = getE("openaiVoice").value
-    data.openai_voice_with_english = getE("voiceEnglishYes").checked
-  } else if (provider === "xiaozhi") {
-    data.endpoint = getE("xiaozhiBaseURL").value;
-    const deviceIDInput = getE("xiaozhiDeviceID");
-    if (deviceIDInput) {
-      data.device_id = deviceIDInput.value.trim();
-      console.log("[KG API] Saving device_id:", data.device_id);
-    } else {
-      console.warn("[KG API] xiaozhiDeviceID input not found when saving");
-      data.device_id = "";
-    }
-    const clientIDInput = getE("xiaozhiClientID");
-    if (clientIDInput) {
-      data.client_id = clientIDInput.value.trim();
-      console.log("[KG API] Saving client_id:", data.client_id);
-    } else {
-      console.warn("[KG API] xiaozhiClientID input not found when saving");
-      data.client_id = "";
-    }
-    data.openai_voice = getE("xiaozhiVoice").value;
-    // Xiaozhi TTS volume (normal|medium|high)
-    const volEl = getE("xiaozhiTTSVolume");
-    data.xiaozhi_tts_volume = volEl ? volEl.value : "normal";
-    data.intentgraph = getE("intentyes").checked
-    data.save_chat = getE("saveChatYes").checked
-    data.xiaozhi_disable_intent = getE("xiaozhiDisableIntent").checked
-    data.commands_enable = getE("commandYes").checked
-    data.openai_voice_with_english = getE("voiceEnglishYes").checked
-  } else if (provider === "custom") {
-    data.key = getE("customKey").value;
-    data.model = getE("customModel").value;
-    data.openai_prompt = getE("customAIPrompt").value;
-    data.endpoint = getE("customAIEndpoint").value;
-    data.intentgraph = getE("intentyes").checked
-    data.save_chat = getE("saveChatYes").checked
-    data.commands_enable = getE("commandYes").checked
-  } else if (provider === "together") {
-    data.key = getE("togetherKey").value;
-    data.model = getE("togetherModel").value;
-    data.openai_prompt = getE("togetherAIPrompt").value;
-    data.intentgraph = getE("intentyes").checked;
-    data.save_chat = getE("saveChatYes").checked
-    data.commands_enable = getE("commandYes").checked
-  } else if (provider === "houndify") {
-    data.key = getE("houndKey").value;
-    data.id = getE("houndID").value;
-    data.intentgraph = getE("intentyes").checked
+  data.endpoint = getE("xiaozhiBaseURL").value;
+  const deviceIDInput = getE("xiaozhiDeviceID");
+  if (deviceIDInput) {
+    data.device_id = deviceIDInput.value.trim();
+    console.log("[KG API] Saving device_id:", data.device_id);
   } else {
-    data.enable = false;
+    console.warn("[KG API] xiaozhiDeviceID input not found when saving");
+    data.device_id = "";
   }
+  const clientIDInput = getE("xiaozhiClientID");
+  if (clientIDInput) {
+    data.client_id = clientIDInput.value.trim();
+    console.log("[KG API] Saving client_id:", data.client_id);
+  } else {
+    console.warn("[KG API] xiaozhiClientID input not found when saving");
+    data.client_id = "";
+  }
+  const volEl = getE("xiaozhiTTSVolume");
+  data.xiaozhi_tts_volume = volEl ? volEl.value : "normal";
+  data.intentgraph = getE("intentyes").checked
+  data.save_chat = getE("saveChatYes").checked
+  data.xiaozhi_disable_intent = getE("xiaozhiDisableIntent").checked
+  data.commands_enable = getE("commandYes").checked
 
   fetch("/api/set_kg_api", {
     method: "POST",
@@ -524,62 +446,31 @@ function updateKGAPI() {
   fetch("/api/get_kg_api")
     .then((response) => response.json())
     .then((data) => {
-      getE("kgProvider").value = data.provider;
-      if (data.provider === "openai") {
-        getE("openaiKey").value = data.key;
-        getE("openAIPrompt").value = data.openai_prompt;
-        getE("openaiVoice").value = data.openai_voice;
-        getE("commandYes").checked = data.commands_enable
-        getE("intentyes").checked = data.intentgraph
-        getE("saveChatYes").checked = data.save_chat
-        getE("voiceEnglishYes").checked = data.openai_voice_with_english
-      } else if (data.provider === "xiaozhi") {
-        getE("xiaozhiBaseURL").value = data.endpoint || "";
-        const deviceIDInput = getE("xiaozhiDeviceID");
-        if (deviceIDInput) {
-          deviceIDInput.value = data.device_id || "";
-          console.log("[KG API] Loaded device_id:", data.device_id);
-        } else {
-          console.warn("[KG API] xiaozhiDeviceID input not found");
-        }
-        const clientIDInput = getE("xiaozhiClientID");
-        if (clientIDInput) {
-          clientIDInput.value = data.client_id || "";
-          console.log("[KG API] Loaded client_id:", data.client_id);
-        } else {
-          console.warn("[KG API] xiaozhiClientID input not found");
-        }
-        getE("xiaozhiVoice").value = data.openai_voice || "fable";
-        // Xiaozhi TTS volume (normal|medium|high)
-        const volEl = getE("xiaozhiTTSVolume");
-        if (volEl) {
-          volEl.value = data.xiaozhi_tts_volume || "normal";
-        }
-        getE("commandYes").checked = data.commands_enable
-        getE("intentyes").checked = data.intentgraph
-        getE("saveChatYes").checked = data.save_chat
-        getE("xiaozhiDisableIntent").checked = data.xiaozhi_disable_intent || false
-        getE("voiceEnglishYes").checked = data.openai_voice_with_english
-      } else if (data.provider === "together") {
-        getE("togetherKey").value = data.key;
-        getE("togetherModel").value = data.model;
-        getE("togetherAIPrompt").value = data.openai_prompt;
-        getE("commandYes").checked = data.commands_enable
-        getE("intentyes").checked = data.intentgraph
-        getE("saveChatYes").checked = data.save_chat
-      } else if (data.provider === "custom") {
-        getE("customKey").value = data.key;
-        getE("customModel").value = data.model;
-        getE("customAIPrompt").value = data.openai_prompt;
-        getE("customAIEndpoint").value = data.endpoint;
-        getE("commandYes").checked = data.commands_enable
-        getE("intentyes").checked = data.intentgraph
-        getE("saveChatYes").checked = data.save_chat
-      } else if (data.provider === "houndify") {
-        getE("houndKey").value = data.key;
-        getE("houndID").value = data.id;
-        getE("intentyes").checked = data.intentgraph
+      getE("kgProvider").value = "xiaozhi";
+      kgStoredOpenaiVoice = data.openai_voice || "fable";
+      getE("xiaozhiBaseURL").value = data.endpoint || "";
+      const deviceIDInput = getE("xiaozhiDeviceID");
+      if (deviceIDInput) {
+        deviceIDInput.value = data.device_id || "";
+        console.log("[KG API] Loaded device_id:", data.device_id);
+      } else {
+        console.warn("[KG API] xiaozhiDeviceID input not found");
       }
+      const clientIDInput = getE("xiaozhiClientID");
+      if (clientIDInput) {
+        clientIDInput.value = data.client_id || "";
+        console.log("[KG API] Loaded client_id:", data.client_id);
+      } else {
+        console.warn("[KG API] xiaozhiClientID input not found");
+      }
+      const volEl = getE("xiaozhiTTSVolume");
+      if (volEl) {
+        volEl.value = data.xiaozhi_tts_volume || "normal";
+      }
+      getE("commandYes").checked = data.commands_enable
+      getE("intentyes").checked = data.intentgraph
+      getE("saveChatYes").checked = data.save_chat
+      getE("xiaozhiDisableIntent").checked = data.xiaozhi_disable_intent || false
       checkKG();
     });
 }

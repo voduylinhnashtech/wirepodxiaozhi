@@ -1,7 +1,6 @@
 #!/bin/bash
 
 UNAME=$(uname -a)
-COMMIT_HASH="$(git rev-parse --short HEAD)"
 
 if [[ $EUID -ne 0 ]]; then
     echo "This script must be run as root. sudo ./start.sh"
@@ -66,6 +65,8 @@ if [[ -d ./chipper ]]; then
     cd chipper
 fi
 
+COMMIT_HASH="$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")"
+
 #if [[ ! -f ./chipper ]]; then
 #   if [[ -f ./go.mod ]]; then
 #     echo "You need to build chipper first. This can be done with the setup.sh script."
@@ -117,11 +118,12 @@ if [[ ${STT_SERVICE} == "leopard" ]]; then
         $GO_CMD run -tags $GOTAGS -ldflags="${GOLDFLAGS}" cmd/experimental/houndify/main.go
     fi
     elif [[ ${STT_SERVICE} == "xiaozhi" ]]; then
-    if [[ -f ./chipper ]]; then
-        ./chipper
-    else
-        $GO_CMD run -tags $GOTAGS -ldflags="${GOLDFLAGS}" cmd/experimental/xiaozhi/main.go
-    fi
+    echo "Building chipper (experimental/xiaozhi, tags: ${GOTAGS}, commit: ${COMMIT_HASH})..."
+    $GO_CMD build -tags "$GOTAGS" -ldflags "${GOLDFLAGS}" -o chipper ./cmd/experimental/xiaozhi/main.go || {
+        echo "go build failed"
+        exit 1
+    }
+    ./chipper
     elif [[ ${STT_SERVICE} == "whisper" ]]; then
     if [[ -f ./chipper ]]; then
         ./chipper

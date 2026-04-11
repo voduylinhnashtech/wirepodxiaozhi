@@ -18,6 +18,59 @@ type MessageHandler interface {
 	SetActive(active bool)
 }
 
+// llmForwarder keeps ConnectionInfo.LLMHandler non-nil after StoreConnection.
+// StreamingXiaozhiKG calls SetLLMHandler to attach the real delegate; until then,
+// HandleMessage is a no-op so routing never sees "nil LLM handler" for tts/llm/binary.
+type llmForwarder struct {
+	mu       sync.RWMutex
+	delegate MessageHandler
+}
+
+func newLLMForwarder() *llmForwarder {
+	return &llmForwarder{}
+}
+
+func (f *llmForwarder) setDelegate(h MessageHandler) {
+	if f == nil {
+		return
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.delegate != nil {
+		f.delegate.SetActive(false)
+	}
+	f.delegate = h
+	if h != nil {
+		h.SetActive(true)
+	}
+}
+
+func (f *llmForwarder) HandleMessage(messageType int, message []byte) error {
+	f.mu.RLock()
+	d := f.delegate
+	f.mu.RUnlock()
+	if d == nil {
+		return nil
+	}
+	return d.HandleMessage(messageType, message)
+}
+
+func (f *llmForwarder) IsActive() bool {
+	f.mu.RLock()
+	d := f.delegate
+	f.mu.RUnlock()
+	return d != nil && d.IsActive()
+}
+
+func (f *llmForwarder) SetActive(active bool) {
+	f.mu.RLock()
+	d := f.delegate
+	f.mu.RUnlock()
+	if d != nil {
+		d.SetActive(active)
+	}
+}
+
 // ConnectionInfo stores connection information and message handlers
 type ConnectionInfo struct {
 	Conn               *websocket.Conn
@@ -52,11 +105,12 @@ func StartReader(deviceID string, conn *websocket.Conn, sessionID string) {
 	connInfo, exists := connManager.connections[deviceID]
 	if !exists {
 		connInfo = &ConnectionInfo{
-			Conn:          conn,
-			SessionID:     sessionID,
-			InUse:         false,
-			ReaderRunning: false,
-			ReaderStop:    make(chan struct{}),
+			Conn:            conn,
+			SessionID:       sessionID,
+			InUse:           false,
+			ReaderRunning:   false,
+			ReaderStop:      make(chan struct{}),
+			LLMHandler:      newLLMForwarder(),
 		}
 		connManager.connections[deviceID] = connInfo
 	} else {
@@ -399,18 +453,19 @@ func SetLLMHandler(deviceID string, handler MessageHandler) {
 
 	if connInfo, exists := connManager.connections[deviceID]; exists {
 		connInfo.mu.Lock()
-		// Clear old handler if exists (deactivate it to prevent race conditions)
-		if connInfo.LLMHandler != nil {
-			connInfo.LLMHandler.SetActive(false)
-			logger.Println(fmt.Sprintf("[ConnectionManager] Old LLM handler deactivated for device: %s", deviceID))
+		fwd, ok := connInfo.LLMHandler.(*llmForwarder)
+		if !ok {
+			// Migrate legacy: replace direct handler with forwarder
+			if connInfo.LLMHandler != nil {
+				connInfo.LLMHandler.SetActive(false)
+				logger.Println(fmt.Sprintf("[ConnectionManager] Old LLM handler deactivated for device: %s", deviceID))
+			}
+			fwd = newLLMForwarder()
+			connInfo.LLMHandler = fwd
 		}
-		// Set new handler and ensure it's active
-		connInfo.LLMHandler = handler
-		if handler != nil {
-			handler.SetActive(true)
-		}
+		fwd.setDelegate(handler)
 		connInfo.mu.Unlock()
-		logger.Println(fmt.Sprintf("[ConnectionManager] LLM handler set for device: %s (active: true, handler: %v)", deviceID, handler != nil))
+		logger.Println(fmt.Sprintf("[ConnectionManager] LLM handler delegate set for device: %s (delegate: %v)", deviceID, handler != nil))
 	} else {
 		// CRITICAL: Connection doesn't exist in manager yet
 		// This can happen if SetLLMHandler is called before connection is stored
@@ -542,14 +597,15 @@ func StoreConnection(deviceID string, conn *websocket.Conn, sessionID string) er
 	}
 
 	connInfo := &ConnectionInfo{
-		Conn:          conn,
-		SessionID:     sessionID,
-		InUse:         false,
-		ReaderRunning: false,
-		ReaderStop:    make(chan struct{}),
+		Conn:            conn,
+		SessionID:       sessionID,
+		InUse:           false,
+		ReaderRunning:   false,
+		ReaderStop:      make(chan struct{}),
+		LLMHandler:      newLLMForwarder(),
 	}
 	connManager.connections[deviceID] = connInfo
-	logger.Println(fmt.Sprintf("[ConnectionManager] Stored connection for device: %s, sessionID: %s", deviceID, sessionID))
+	logger.Println(fmt.Sprintf("[ConnectionManager] Stored connection for device: %s, sessionID: %s (LLM slot pre-allocated)", deviceID, sessionID))
 
 	// Start reader goroutine (like go-xiaozhi-main)
 	go StartReader(deviceID, conn, sessionID)

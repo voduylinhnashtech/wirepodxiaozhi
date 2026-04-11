@@ -74,68 +74,13 @@
         <h3>Knowledge Graph Setup</h3>
         <hr class="small-hr">
         <div>
-          <p>Select the knowledge provider you would like to use, then enter the required information.</p>
+          <p>Configure the Xiaozhi knowledge graph connection.</p>
           <hr class="small-hr">
           <div id="addKGProviderAPI"></div>
           <form id="kgAPIAddForm">
-            <label for="kgProvider">Knowledge Graph API Provider:</label>
-            <select name="kgProvider" id="kgProvider" form="kgAPIAddForm" onchange="checkKG()">
-              <option value="" selected>None</option>
-              <option value="openai">OpenAI</option>
-              <option value="xiaozhi">Xiaozhi</option>
-              <option value="houndify">Houndify</option>
-              <option value="together">Together</option>
-              <option value="custom">Custom</option>
-            </select>
-            <span id="houndifyInput" style="display: none">
-              <small class="desc">To use Houndify, create an account at
-                <a href="https://www.houndify.com/signup">houndify.com</a>,
-                create a free domain, and enter the Client ID and Key
-                here.</small><br />
-              <label for="houndID">Houndify Client ID:</label>
-              <input type="text" name="houndID" id="houndID" /><br />
-              <label for="houndKey">Houndify Client Key:</label>
-              <input type="text" name="houndKey" id="houndKey" /><br />
-            </span>
-            <span id="togetherInput" style="display: none">
-              <small class="desc">To use Together, create an account at
-                <a href="https://www.together.xyz">together.com</a>, create
-                a free domain, and enter the Model Name and Together Key
-                here.</small><br />
-              <label for="togetherModel">Together Model Name: <small class="desc">(leave blank for default
-                  meta-llama/Llama-3-70b-chat-hf)</small></label>
-              <input type="text" name="togetherModel" id="togetherModel" /><br />
-              <label for="togetherKey">Together Key:</label>
-              <input type="text" name="togetherKey" id="togetherKey" /><br />
-              <label for="togetherAIPrompt">GPT Prompt <small class="desc">(leave blank for
-                  default):</small></label><br />
-              <small><label class="desc" for="togetherAIPrompt">(default: "You are a helpful, animated robot called
-                  Vector. Keep the response concise yet
-                  informative.")</label></small>
-              <input type="text" name="togetherAIPrompt" id="togetherAIPrompt" /><br />
-            </span>
-            <span id="openAIInput" style="display: none">
-              <label for="openaiKey">OpenAI Key:</label>
-              <input type="text" name="openaiKey" id="openaiKey" /><br />
-              <label for="openaiKey">GPT Prompt <small class="desc">(leave blank for default):</small></label><br />
-              <small><label class="desc" for="openAIPrompt">(default: "You are a helpful, animated robot called
-                  Vector. Keep the response concise yet
-                  informative.")</label></small>
-              <input type="text" name="openAIPrompt" id="openAIPrompt" /><br />
-              <label for="openaiVoice">OpenAI TTS voice for non-English languages:</label><br />
-              <small class="desc">See <a target="_blank"
-                  href="https://platform.openai.com/docs/guides/text-to-speech/voice-options">OpenAI's TTS site</a> to
-                demo each voice.</small><br />
-              <select name="openaiVoice" id="openaiVoice">
-                <option value="fable" selected>Fable</option>
-                <option value="alloy">Alloy</option>
-                <option value="echo">Echo</option>
-                <option value="onyx">Onyx</option>
-                <option value="nova">Nova</option>
-                <option value="shimmer">Shimmer</option>
-              </select>
-            </span>
-            <span id="xiaozhiInput" style="display: none">
+            <p><strong>Knowledge Graph API Provider:</strong> Xiaozhi</p>
+            <input type="hidden" id="kgProvider" name="kgProvider" value="xiaozhi" />
+            <span id="xiaozhiInput">
               <small class="desc">Xiaozhi provides real-time voice conversation with your Vector robot. Audio will be played through the robot's speaker.</small><br />
               <label for="xiaozhiBaseURL">Xiaozhi Base URL <small class="desc">(leave blank for default: wss://api.tenclass.net/xiaozhi/v1/)</small>:</label>
               <input type="text" name="xiaozhiBaseURL" id="xiaozhiBaseURL" placeholder="wss://api.tenclass.net/xiaozhi/v1/" /><br />
@@ -144,17 +89,6 @@
               <label for="xiaozhiClientID">Client ID (UUID) <small class="desc">(Client ID để xác định client, ví dụ: e8c9b0b3-350f-406d-a31c-7b87be097881)</small>:</label>
               <input type="text" name="xiaozhiClientID" id="xiaozhiClientID" placeholder="e8c9b0b3-350f-406d-a31c-7b87be097881" style="font-family: monospace;" /><br />
               <small class="desc" style="color: #666;">MAC address này sẽ được gửi trong headers khi sử dụng TTS/STT của xiaozhi. Điền MAC address của thiết bị đã được pair với server xiaozhi.</small><br />
-              <label for="xiaozhiVoice">Xiaozhi TTS Voice:</label><br />
-              <small class="desc">Voice used for text-to-speech responses.</small><br />
-              <select name="xiaozhiVoice" id="xiaozhiVoice">
-                <option value="fable" selected>Fable</option>
-                <option value="alloy">Alloy</option>
-                <option value="echo">Echo</option>
-                <option value="onyx">Onyx</option>
-                <option value="nova">Nova</option>
-                <option value="shimmer">Shimmer</option>
-              </select>
-              <br /><br />
               <label for="xiaozhiTTSVolume">Xiaozhi TTS Volume:</label><br />
               <small class="desc">Normal = 1x, Medium = 2x, High = 4x.</small><br />
               <select name="xiaozhiTTSVolume" id="xiaozhiTTSVolume">
@@ -162,24 +96,6 @@
                 <option value="medium">Medium (2x)</option>
                 <option value="high">High (4x)</option>
               </select>
-            </span>
-
-            <span id="customAIInput" style="display: none">
-              <small class="desc">All LLM hosts that have OpenAI API compatibility are supported. For advanced
-                users.</small><br />
-              <label for="customKey">API Key <small class="desc">(for ollama, this is just 'ollama')</small>:</label>
-              <input type="text" name="customKey" id="customKey" /><br />
-              <label for="customAIEndpoint">API Endpoint <small class="desc">(i.e.
-                  http://localhost:11434/v1)</small>:</label>
-              <input type="text" name="customAIEndpoint" id="customAIEndpoint" /><br />
-              <label for="customModel">LLM Model Name <small class="desc">(i.e. 'llama3')</small>:</label>
-              <input type="text" name="customModel" id="customModel" /><br />
-              <label for="customAIPrompt">LLM Prompt <small class="desc">(leave blank for
-                  default)</small>:</label><br />
-              <small><label class="desc" for="customAIPrompt">(default: "You are a helpful, animated robot called
-                  Vector. Keep the response concise yet
-                  informative.")</label></small>
-              <input type="text" name="customAIPrompt" id="customAIPrompt" /><br />
             </span>
 
             <div style="text-align: left;">
@@ -209,12 +125,6 @@
                 <input type="checkbox" id="xiaozhiDisableIntent" name="xiaozhiDisableIntent" />
                 <label class="checkbox-label" for="xiaozhiDisableIntent">
                   Disable local intent matching for Xiaozhi. When enabled, all voice commands will be sent directly to the LLM server without checking local intents first. This allows the LLM to handle all commands, including complex requests.
-                </label>
-              </span>
-              <span id="openAIVoiceForEnglishInput" style="display: none">
-                <input type="checkbox" id="voiceEnglishYes" name="voiceEnglishselect" />
-                <label class="checkbox-label" for="voiceEnglishYes">
-                  Use the OpenAI TTS voice for English as well.
                 </label>
               </span>
             </div>

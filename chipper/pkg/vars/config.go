@@ -96,10 +96,32 @@ func WriteSTT() {
 	}
 }
 
+// applyWirepodProductionDefaults matches the old initial.html flow (Escape Pod + Submit):
+// Escape Pod (epconfig), port 443, Xiaozhi STT; initwirepod writes server_config.json after vars.Init.
+func applyWirepodProductionDefaults() {
+	logger.Println("🔧 Applying default production settings (Xiaozhi STT + Escape Pod + Knowledge Graph = Xiaozhi)")
+	APIConfig.Server.EPConfig = true
+	APIConfig.Server.Port = "443"
+	APIConfig.STT.Service = "xiaozhi"
+	APIConfig.STT.Language = "vi-VN"
+	APIConfig.STT.IntentMatchingMode = "multilingual"
+	APIConfig.Knowledge.Enable = true
+	APIConfig.Knowledge.Provider = "xiaozhi"
+	APIConfig.PastInitialSetup = true
+	APIConfig.HasReadFromEnv = true
+	logger.Println("✅ Defaults applied: EPConfig=true, Port=443, STT=xiaozhi, KG provider=xiaozhi")
+}
+
 func ReadConfig() {
 	if _, err := os.Stat(ApiConfigPath); err != nil {
 		CreateConfigFromEnv()
+		if !APIConfig.PastInitialSetup {
+			applyWirepodProductionDefaults()
+			writeBytes, _ := json.Marshal(APIConfig)
+			os.WriteFile(ApiConfigPath, writeBytes, 0644)
+		}
 		logger.Println("API config JSON created")
+		return
 	} else {
 		// read config
 		configBytes, err := os.ReadFile(ApiConfigPath)
@@ -134,27 +156,10 @@ func ReadConfig() {
 			APIConfig.Knowledge.Model = "meta-llama/Llama-3-70b-chat-hf"
 		}
 
-		// Auto-configure default settings for first-time setup (Xiaozhi + Escape Pod)
-		// This skips the initial setup page and goes straight to the main setup page
+		// First-time installs: same as former initial.html + use_ep (no wizard page).
 		if !APIConfig.PastInitialSetup {
-			logger.Println("🔧 First-time setup detected - Auto-configuring defaults (Xiaozhi STT + Escape Pod)")
-			
-			// Set Escape Pod mode (recommended for production robots)
-			APIConfig.Server.EPConfig = true
-			APIConfig.Server.Port = "443"
-			
-		// Set Xiaozhi as default STT service
-		APIConfig.STT.Service = "xiaozhi"
-		APIConfig.STT.Language = "vi-VN"                 // Default to Vietnamese, can be changed later
-		APIConfig.STT.IntentMatchingMode = "multilingual" // Default to multilingual for better UX
-			
-			// Mark initial setup as complete to skip initial.html
-			APIConfig.PastInitialSetup = true
-			APIConfig.HasReadFromEnv = true
-			
-			logger.Println("✅ Auto-config complete: EPConfig=true, Port=443, STT=xiaozhi, Language=vi-VN")
-			logger.Println("ℹ️  You can change these settings in the web interface at http://localhost:8080")
-			logger.Println("ℹ️  Skipping initial setup page - going straight to main setup")
+			applyWirepodProductionDefaults()
+			logger.Println("ℹ️  Skipping initial.html — defaults saved; open main UI to adjust if needed")
 		}
 
 		writeBytes, _ := json.Marshal(APIConfig)
