@@ -243,6 +243,10 @@ type LLMHandler struct {
 	// textResponse and timed out. Merged with textResponse in StreamingXiaozhiKG select.
 	replyStarted     chan struct{}
 	replyStartedOnce sync.Once
+	// robot is set for commands_enable: play animations from {{playAnimationWI||...}} in upstream text.
+	robot *vector.Vector
+	// cmdTextSeen dedupes identical llm vs tts sentence_start payloads in one TTS turn.
+	cmdTextSeen map[string]struct{}
 }
 
 // signalReplyStarted fires once when TTS/audio/text pipeline has visibly started (xiaozhi-esp32 style).
@@ -256,6 +260,40 @@ func (h *LLMHandler) signalReplyStarted() {
 		default:
 		}
 	})
+}
+
+func (h *LLMHandler) maybePerformCommandsFromText(text string, skipEmojiFallback bool) {
+	if h == nil || strings.TrimSpace(text) == "" {
+		return
+	}
+	if !vars.APIConfig.Knowledge.CommandsEnable {
+		return
+	}
+	h.mu.Lock()
+	if h.cmdTextSeen == nil {
+		h.cmdTextSeen = make(map[string]struct{})
+	}
+	if _, dup := h.cmdTextSeen[text]; dup {
+		h.mu.Unlock()
+		return
+	}
+	h.cmdTextSeen[text] = struct{}{}
+	robot := h.robot
+	h.mu.Unlock()
+	PerformXiaozhiCommandsFromLLMText(text, robot, skipEmojiFallback)
+}
+
+func (h *LLMHandler) maybePerformOttoEmotion(emotion string) bool {
+	if h == nil || strings.TrimSpace(emotion) == "" {
+		return false
+	}
+	if !vars.APIConfig.Knowledge.CommandsEnable {
+		return false
+	}
+	h.mu.RLock()
+	robot := h.robot
+	h.mu.RUnlock()
+	return PerformXiaozhiOttoEmotion(emotion, robot)
 }
 
 func padToMultiple(b []byte, multiple int) []byte {
@@ -297,8 +335,19 @@ func (h *LLMHandler) HandleMessage(messageType int, message []byte) error {
 
 		switch eventType {
 		case "llm":
+			// xiaozhi-esp32 Application: type "llm" may include "emotion" (Otto-style) for display; we map to Vector animations.
+			emStr := ""
+			if em, ok := event["emotion"].(string); ok {
+				emStr = strings.TrimSpace(em)
+			}
+			ottoPlayed := false
+			if emStr != "" {
+				logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] ✅ LLM emotion (Otto-style): '%s'", emStr))
+				ottoPlayed = h.maybePerformOttoEmotion(emStr)
+			}
 			if text, ok := event["text"].(string); ok && text != "" {
 				logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] ✅ LLM text: '%s'", text))
+				h.maybePerformCommandsFromText(text, ottoPlayed)
 				select {
 				case h.textResponse <- text:
 					logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] ✅ LLM text sent to channel: '%s'", text))
@@ -306,6 +355,9 @@ func (h *LLMHandler) HandleMessage(messageType int, message []byte) error {
 				default:
 					logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] ⚠️  textResponse channel is full, dropping text"))
 				}
+			} else if emStr != "" {
+				// Emotion-only llm (no text yet) — unblock reply wait like tts/audio-first.
+				h.signalReplyStarted()
 			}
 		case "tts":
 			if state, ok := event["state"].(string); ok {
@@ -324,6 +376,7 @@ func (h *LLMHandler) HandleMessage(messageType int, message []byte) error {
 					h.audioChunkCount = 0
 					h.ttsStopReceived = false
 					h.audioFinalized = false
+					h.cmdTextSeen = make(map[string]struct{})
 					h.mu.Unlock()
 					logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] ✅ TTS started, ready to receive Opus frames"))
 					// ESP32-style: server may stream audio before any llm text — unblock KG wait.
@@ -332,6 +385,7 @@ func (h *LLMHandler) HandleMessage(messageType int, message []byte) error {
 					// TTS sentence_start contains the full text response (priority over LLM event)
 					if text, ok := event["text"].(string); ok && text != "" {
 						logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] ✅ TTS sentence_start text: '%s'", text))
+						h.maybePerformCommandsFromText(text, false)
 						select {
 						case h.textResponse <- text:
 							logger.Println(fmt.Sprintf("[Xiaozhi KG Handler] ✅ TTS sentence_start text sent to channel: '%s'", text))
@@ -987,6 +1041,7 @@ func StreamingXiaozhiKG(esn string, transcribedText string, isKG bool, isConvers
 		audioQueueStarted:       false,
 		esn:                     esn, // Store ESN for checking first audio playback
 		replyStarted:            make(chan struct{}, 1),
+		robot:                   robot,
 	}
 
 	// CRITICAL: Register LLM handler BEFORE Vector audio setup, WaitForAudio_Queue, and text query.
@@ -1613,9 +1668,10 @@ func StreamingXiaozhiKG(esn string, transcribedText string, isKG bool, isConvers
 	// Nếu tạo connection mới, sessionID đã được extract từ hello response ở trên
 	// botkct.py (line 634-638) sử dụng format: {"session_id": "...", "type": "text", "text": "..."}
 	// botkct.py KHÔNG gửi listen start trước text message, nó gửi text message trực tiếp trên cùng connection
+	textForUpstream := AppendXiaozhiUserTextCommandHint(transcribedText)
 	textMessage := map[string]interface{}{
 		"type": "text",
-		"text": transcribedText,
+		"text": textForUpstream,
 	}
 	// Extract session_id from hello response if available (giống botkct.py)
 	if sessionID != "" {
@@ -1625,7 +1681,7 @@ func StreamingXiaozhiKG(esn string, transcribedText string, isKG bool, isConvers
 	// KHÔNG thêm device_id hay client_id vào message body (theo botkct.py)
 
 	logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | ========== SENDING TEXT QUERY ==========", esn))
-	logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | Sending text query: %s", esn, transcribedText))
+	logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | Sending text query: %s", esn, textForUpstream))
 	textMessageJSON, _ := json.Marshal(textMessage)
 	logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | Text message JSON: %s", esn, string(textMessageJSON)))
 	logger.Println(fmt.Sprintf("[Xiaozhi KG] Device: %s | Connection status: conn == nil? %v, connFromSTT? %v, sessionID: %s", esn, conn == nil, connFromSTT, sessionID))
@@ -1657,7 +1713,7 @@ func StreamingXiaozhiKG(esn string, transcribedText string, isKG bool, isConvers
 	// Send text query (we need to convert to audio first)
 	// For now, we'll send a simple text message
 	// In production, you'd use TTS to convert text to Opus audio first
-	logger.Println("Xiaozhi KG: Sending query: " + transcribedText)
+	logger.Println("Xiaozhi KG: Sending query: " + textForUpstream)
 
 	// Note: xiaozhi expects audio input, so we need to handle text differently
 	// For now, we'll just wait for response

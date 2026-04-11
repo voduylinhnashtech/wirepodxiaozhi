@@ -180,6 +180,155 @@ func CreatePrompt(origPrompt string, model string, isKG bool, useConversationMod
 	return prompt
 }
 
+// AppendXiaozhiUserTextCommandHint appends instructions so the upstream Xiaozhi LLM may emit
+// {{playAnimationWI||...}} tokens (same format as OpenAI KG when commands_enable is on).
+// If the server TTS speaks the assistant reply verbatim, markers may be audible unless the server strips them.
+func AppendXiaozhiUserTextCommandHint(userText string) string {
+	if !vars.APIConfig.Knowledge.CommandsEnable || strings.TrimSpace(userText) == "" {
+		return userText
+	}
+	hint := "\n\n[Vector robot — control tokens, omit when speaking] Use {{playAnimationWI||NAME}} where NAME is one of: happy, veryHappy, sad, verySad, angry, frustrated, dartingEyes, confused, thinking, celebrate, love. Place at sentence starts. Example: {{playAnimationWI||happy}} ...\nAlternatively the server may send JSON llm.emotion (same names as xiaozhi-esp32/Otto: happy, sad, angry, thinking, confused, neutral, ...)."
+	return userText + hint
+}
+
+// VectorAnimFromOttoEmotion maps xiaozhi-esp32 style llm.emotion strings (see Otto otto_emoji_display.cc)
+// to wire-pod Vector animation keys. Returns "" for neutral/unknown (no animation).
+func VectorAnimFromOttoEmotion(emotion string) string {
+	e := strings.TrimSpace(emotion)
+	if e == "" {
+		return ""
+	}
+	for _, row := range animationMap {
+		if strings.EqualFold(row[0], e) {
+			return row[0]
+		}
+	}
+	el := strings.ToLower(e)
+	switch el {
+	case "staticstate", "neutral", "relaxed", "sleepy", "idle":
+		return ""
+	case "happy", "laughing", "funny", "confident", "winking", "cool", "delicious", "silly":
+		return "happy"
+	case "loving", "kissy":
+		return "love"
+	case "sad", "crying":
+		return "sad"
+	case "anger", "angry":
+		return "angry"
+	case "scare", "surprised", "shocked":
+		return "dartingEyes"
+	case "buxue", "thinking":
+		return "thinking"
+	case "confused", "embarrassed":
+		return "confused"
+	default:
+		return ""
+	}
+}
+
+// PerformXiaozhiOttoEmotion plays a Vector animation from an upstream llm.emotion field (Otto-style).
+func PerformXiaozhiOttoEmotion(emotion string, robot *vector.Vector) bool {
+	if robot == nil || !vars.APIConfig.Knowledge.CommandsEnable {
+		return false
+	}
+	anim := VectorAnimFromOttoEmotion(emotion)
+	if anim == "" {
+		return false
+	}
+	_ = DoPlayAnimationWI(anim, robot)
+	return true
+}
+
+// emojiAnimPairs maps emoji (or short Unicode sequences) to animationMap keys when the upstream
+// LLM sends emoji-only or emoji-heavy text (common on Xiaozhi) instead of {{playAnimationWI||...}}.
+var emojiAnimPairs = []struct {
+	emoji string
+	anim  string
+}{
+	{"😭", "verySad"},
+	{"🥳", "celebrate"},
+	{"🎉", "celebrate"},
+	{"🎊", "celebrate"},
+	{"😊", "happy"},
+	{"😀", "happy"},
+	{"😃", "happy"},
+	{"😄", "happy"},
+	{"😁", "happy"},
+	{"🙂", "happy"},
+	{"😆", "happy"},
+	{"😅", "happy"},
+	{"🤣", "happy"},
+	{"😂", "happy"},
+	{"😉", "happy"},
+	{"😍", "love"},
+	{"🥰", "love"},
+	{"😘", "love"},
+	{"❤️", "love"},
+	{"💕", "love"},
+	{"💖", "love"},
+	{"😢", "sad"},
+	{"😔", "sad"},
+	{"😞", "sad"},
+	{"☹️", "sad"},
+	{"😟", "sad"},
+	{"🙁", "sad"},
+	{"😠", "angry"},
+	{"😡", "angry"},
+	{"🤬", "angry"},
+	{"😤", "angry"},
+	{"😩", "frustrated"},
+	{"😫", "frustrated"},
+	{"🤦", "frustrated"},
+	{"🤔", "thinking"},
+	{"💭", "thinking"},
+	{"😕", "confused"},
+	{"😖", "confused"},
+	{"🤨", "confused"},
+	{"👀", "dartingEyes"},
+}
+
+func animationNameFromEmojiText(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	bestIdx := len(s) + 1
+	bestAnim := ""
+	for _, p := range emojiAnimPairs {
+		if idx := strings.Index(s, p.emoji); idx >= 0 && idx < bestIdx {
+			bestIdx = idx
+			bestAnim = p.anim
+		}
+	}
+	return bestAnim
+}
+
+// PerformXiaozhiCommandsFromLLMText parses command tokens from Xiaozhi llm/tts text and runs only
+// animation actions on Vector. SayText is not used — TTS audio is streamed from the Xiaozhi server.
+// If there are no {{...}} commands, falls back to emoji → animation (e.g. "😊" → happy), unless skipEmojiFallback is true (e.g. llm.emotion already drove an animation).
+func PerformXiaozhiCommandsFromLLMText(text string, robot *vector.Vector, skipEmojiFallback bool) {
+	if robot == nil || !vars.APIConfig.Knowledge.CommandsEnable {
+		return
+	}
+	actions := GetActionsFromString(text)
+	played := false
+	for _, action := range actions {
+		switch action.Action {
+		case ActionPlayAnimation:
+			_ = DoPlayAnimation(action.Parameter, robot)
+			played = true
+		case ActionPlayAnimationWI:
+			_ = DoPlayAnimationWI(action.Parameter, robot)
+			played = true
+		}
+	}
+	if !played && !skipEmojiFallback {
+		if anim := animationNameFromEmojiText(text); anim != "" {
+			_ = DoPlayAnimationWI(anim, robot)
+		}
+	}
+}
+
 func GetActionsFromString(input string) []RobotAction {
 	splitInput := strings.Split(input, "{{")
 	if len(splitInput) == 1 {
