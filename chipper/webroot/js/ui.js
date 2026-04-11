@@ -35,7 +35,7 @@ var colorMap = {
 };
 
 function showUICustomizer() {
-    toggleVisibility(["section-log", "section-botauth", "section-intents", "section-version", "section-intents"], "section-uicustomizer", "icon-Customizer");
+    toggleVisibility(["section-log", "section-botauth", "section-uicustomizer"], "section-uicustomizer", "icon-Customizer");
 }
 
 function setUIFont() {

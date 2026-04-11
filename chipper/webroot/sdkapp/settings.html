@@ -2,7 +2,7 @@
 <html>
 
 <head>
-  <title>Vector Web App</title>
+  <title>Vector Web App · Cài đặt bot</title>
   <!-- Meta Apple tags for a PWA like experience. -->
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
@@ -19,69 +19,69 @@
 
   <div id="outer">
     <div id="content" class="">
-      <h1 class="center">Vector Configuration</h1>
+      <h1 class="center">Vector Configuration <small style="font-weight:normal;display:block;font-size:.55em;opacity:.9;">(Cấu hình Vector)</small></h1>
       <div id="botStats"></div>
       <hr>
       <div class="main-nav-parent">
-        <div class="main-nav-child"><a href="/sdkapp"><i class="fa-solid fa-reply"></i><br />Back</a></div>
+        <div class="main-nav-child"><a href="/sdkapp"><i class="fa-solid fa-reply"></i><br />Back<br /><small>(Quay lại)</small></a></div>
         <div class="main-nav-child"><a href="#" onclick="goToControlPage()"><i
-              class="fa-solid fa-gamepad"></i><br />Control<br /></a></div>
+              class="fa-solid fa-gamepad"></i><br />Control<br /><small>(Điều khiển)</small></a></div>
         <div class="main-nav-child"><a href="#" onclick="showSection('section-volume'); return false;"><i
-              class="fa-solid fa-volume-high" id="icon-volume" name="icon"></i><br />Volume</a></div>
+              class="fa-solid fa-volume-high" id="icon-volume" name="icon"></i><br />Volume<br /><small>(Âm lượng)</small></a></div>
         <div class="main-nav-child"><a href="#" onclick="showSection('section-eyes'); return false;"><i
-              class="fa-solid fa-eye" id="icon-eyes" name="icon"></i><br />Eye Color</a></div>
+              class="fa-solid fa-eye" id="icon-eyes" name="icon"></i><br />Eye Color<br /><small>(Màu mắt)</small></a></div>
         <div class="main-nav-child"><a href="#" onclick="showSection('section-face'); return false;"><i
-              class="fa-solid fa-user" id="icon-face" name="icon"></i><br />Faces</a></div>
+              class="fa-solid fa-user" id="icon-face" name="icon"></i><br />Faces<br /><small>(Khuôn mặt)</small></a></div>
         <div class="main-nav-child"><a href="#" onclick="showSection('section-actions'); return false;"><i
-              class="fa-solid fa-person-running" id="icon-actions" name="icon"></i><br />Actions</a></div>
+              class="fa-solid fa-person-running" id="icon-actions" name="icon"></i><br />Actions<br /><small>(Thao tác)</small></a></div>
         <div class="main-nav-child"><a href="#" onclick="showSection('section-stim'); return false;"><i
-              class="fa-solid fa-face-laugh-beam" id="icon-stim" name="icon"></i><br />Stim</a></div>
+              class="fa-solid fa-face-laugh-beam" id="icon-stim" name="icon"></i><br />Stim<br /><small>(Kích thích)</small></a></div>
         <div class="main-nav-child"><a href="#" onclick="showSection('section-stats'); return false;"><i
-              class="fa-solid fa-chart-simple" id="icon-stim" name="icon"></i><br />Statistics</a></div>
+              class="fa-solid fa-chart-simple" id="icon-stim" name="icon"></i><br />Statistics<br /><small>(Thống kê)</small></a></div>
         <div class="main-nav-child"><a href="#" onclick="showSection('section-photos'); getPhotos(); return false;"><i
-              class="fa-solid fa-images" id="icon-photos" name="icon"></i><br />Photos</a></div>
+              class="fa-solid fa-images" id="icon-photos" name="icon"></i><br />Photos<br /><small>(Ảnh)</small></a></div>
         <div class="main-nav-child"><a href="#" onclick="showSection('section-locale'); return false;"><i
-              class="fa-solid fa-earth-americas" id="icon-locale" name="icon"></i><br />Locale</a></div>
+              class="fa-solid fa-earth-americas" id="icon-locale" name="icon"></i><br />Locale<br /><small>(Ngôn ngữ vùng)</small></a></div>
         <div class="main-nav-child"><a href="#" onclick="showSection('section-time'); return false;"><i
-              class="fa-solid fa-clock" id="icon-time" name="icon"></i><br />Time</a></div>
+              class="fa-solid fa-clock" id="icon-time" name="icon"></i><br />Time<br /><small>(Định dạng giờ)</small></a></div>
         <div class="main-nav-child"><a href="#" onclick="showSection('section-temp'); return false;"><i
-              class="fa-solid fa-temperature-half" id="icon-temp" name="icon"></i><br />Units</a></div>
+              class="fa-solid fa-temperature-half" id="icon-temp" name="icon"></i><br />Units<br /><small>(Đơn vị nhiệt)</small></a></div>
         <div class="main-nav-child"><a href="#" onclick="showSection('section-button'); return false;"><i
-              class="fa-solid fa-circle-dot" id="icon-button" name="icon"></i><br />Button</a></div>
+              class="fa-solid fa-circle-dot" id="icon-button" name="icon"></i><br />Button<br /><small>(Nút)</small></a></div>
         <div class="main-nav-child"><a href="#" onclick="showSection('section-alexa'); return false;"><i
-              class="fa-solid fa-house-signal" id="icon-alexa" name="icon"></i><br />Alexa</a></div>
+              class="fa-solid fa-house-signal" id="icon-alexa" name="icon"></i><br />Alexa<br /><small>(Alexa)</small></a></div>
         <div class="main-nav-child"><a href="#" onclick="showSection('section-location'); return false;"><i
-              class="fa-solid fa-location-crosshairs" id="icon-location" name="icon"></i><br />Location</a></div>
+              class="fa-solid fa-location-crosshairs" id="icon-location" name="icon"></i><br />Location<br /><small>(Vị trí)</small></a></div>
         <div class="main-nav-child"><a href="#" onclick="showSection('section-timezone'); return false;"><i
-              class="fa-solid fa-hourglass" id="icon-timezone" name="icon"></i><br />Time Zone</a></div>
+              class="fa-solid fa-hourglass" id="icon-timezone" name="icon"></i><br />Time Zone<br /><small>(Múi giờ)</small></a></div>
       </div>
       <hr>
 
       <div id="section-volume" class="toggleable-section" style="display:none;">
-        <h2 class="center">Volume</h2>
+        <h2 class="center">Volume <small style="font-weight:normal;opacity:.85;">(Âm lượng)</small></h2>
         <hr class="small-hr">
         <div id="currentVolume" class="center"></div>
         <div style="text-align: left;" class="center">
           <label>
-            <input type="radio" name="vol" id="Mute" value="Mute" onclick="sendForm('/api-sdk/volume?volume=0')">Mute
+            <input type="radio" name="vol" id="Mute" value="Mute" onclick="sendForm('/api-sdk/volume?volume=0')">Mute <small>(Tắt)</small>
           </label>
           <label>
-            <input type="radio" name="vol" id="Low" value="Low" onclick="sendForm('/api-sdk/volume?volume=1')">Low
+            <input type="radio" name="vol" id="Low" value="Low" onclick="sendForm('/api-sdk/volume?volume=1')">Low <small>(Thấp)</small>
           </label>
           <label>
             <input type="radio" name="vol" id="Medium Low" value="Medium Low"
-              onclick="sendForm('/api-sdk/volume?volume=2')">Medium Low
+              onclick="sendForm('/api-sdk/volume?volume=2')">Medium Low <small>(Trung thấp)</small>
           </label>
           <label>
             <input type="radio" name="vol" id="Medium" value="Medium"
-              onclick="sendForm('/api-sdk/volume?volume=3')">Medium
+              onclick="sendForm('/api-sdk/volume?volume=3')">Medium <small>(Trung bình)</small>
           </label>
           <label>
             <input type="radio" name="vol" id="Medium High" value="Medium High"
-              onclick="sendForm('/api-sdk/volume?volume=4')">Medium High
+              onclick="sendForm('/api-sdk/volume?volume=4')">Medium High <small>(Trung cao)</small>
           </label>
           <label>
-            <input type="radio" name="vol" id="High" value="High" onclick="sendForm('/api-sdk/volume?volume=5')">High
+            <input type="radio" name="vol" id="High" value="High" onclick="sendForm('/api-sdk/volume?volume=5')">High <small>(Cao)</small>
           </label>
         </div>
         <br>
@@ -89,9 +89,9 @@
       </div>
 
       <div id="section-eyes" class="toggleable-section" style="display:none;">
-        <h2 style="margin-bottom: 0px;">Eye Color</h2>
+        <h2 style="margin-bottom: 0px;">Eye Color <small style="font-weight:normal;opacity:.85;">(Màu mắt)</small></h2>
         <hr class="small-hr">
-        <h4 style="margin-bottom: 0px; margin-top:0px;">Preset Eye Colors:</h4>
+        <h4 style="margin-bottom: 0px; margin-top:0px;">Preset Eye Colors: <small>(Màu có sẵn)</small></h4>
         <div style="text-align: left;" class="center">
           <label>
             <input type="radio" name="eye" id="Teal" value="Teal"
@@ -124,71 +124,66 @@
         </div>
         <br />
         <hr class="small-hr">
-        <h4 style="margin-top: 0px;" class="center">Custom Eye Color:</h4>
+        <h4 style="margin-top: 0px;" class="center">Custom Eye Color: <small>(Tuỳ chỉnh màu)</small></h4>
         <div class="center" id="picker"></div><br />
         <div class="center">
-          <button class="settings" onclick="sendCustomColor()">Submit</button>
+          <button class="settings" onclick="sendCustomColor()">Submit <small>(Áp dụng)</small></button>
         </div>
         <hr>
       </div>
 
       <div id="section-face" class="toggleable-section" style="display:none;">
-        <h2 class="center">Face Manager</h2>
+        <h2 class="center">Face Manager <small style="font-weight:normal;opacity:.85;">(Quản lý khuôn mặt)</small></h2>
         <hr class="small-hr">
-        <h3 class="center">Modify existing faces:</h3>
-        <p class="center">Choose the face you would like to modify.</p>
+        <h3 class="center">Modify existing faces: <small>(Sửa khuôn mặt)</small></h3>
+        <p class="center">Choose the face you would like to modify. <small><em>(Chọn khuôn mặt cần sửa.)</em></small></p>
         <div class="center">
           <select id="faceList" name="faceList"></select>
         </div>
         <div class="center">
-          <button class="center" onclick="refreshFaceList()">Refresh list</button>
+          <button class="center" onclick="refreshFaceList()">Refresh list <small>(Làm mới)</small></button>
         </div>
         <div class="center">
           <div id="faceButtons">
-            <button onclick="deleteFace()">Delete</button>
-            <button onclick="renameFace()">Rename</button>
+            <button onclick="deleteFace()">Delete <small>(Xóa)</small></button>
+            <button onclick="renameFace()">Rename <small>(Đổi tên)</small></button>
           </div>
         </div>
         <hr class="small-hr">
-        <h3 class="center">Add a new face:</h3>
-        <p class="center">Enter a name you'd like to add:</p>
+        <h3 class="center">Add a new face: <small>(Thêm khuôn mặt)</small></h3>
+        <p class="center">Enter a name you'd like to add: <small><em>(Nhập tên muốn thêm.)</em></small></p>
         <div class="center">
-          <input class="tinput" id="faceInput" name="faceInput" type="text" placeholder="Put name here">
+          <input class="tinput" id="faceInput" name="faceInput" type="text" placeholder="Put name here (Nhập tên)">
         </div>
         <div class="center">
-          <button onclick="addFace()">Add Face</button>
+          <button onclick="addFace()">Add Face <small>(Thêm)</small></button>
         </div>
         <hr>
       </div>
 
       <div id="section-actions" class="toggleable-section" style="display:none;">
-        <h2 class="center">Quick Actions</h2>
+        <h2 class="center">Quick Actions <small style="font-weight:normal;opacity:.85;">(Thao tác nhanh)</small></h2>
         <hr class="small-hr">
         <div class="center">
-          <button onclick="sendForm('/api-sdk/cloud_intent?intent=explore_start')">Explore
-            Start</button>
-          <button onclick="sendForm('/api-sdk/cloud_intent?intent=intent_imperative_dance')">Listen for
-            Beat</button>
-          <button onclick="sendForm('/api-sdk/cloud_intent?intent=intent_system_sleep')">Go to
-            Sleep</button>
-          <button onclick="sendForm('/api-sdk/cloud_intent?intent=intent_imperative_fetchcube')">Fetch
-            Cube</button>
-          <button onclick="sendForm('/api-sdk/cloud_intent?intent=intent_system_charger')">Go
-            Home</button>
+          <button onclick="sendForm('/api-sdk/cloud_intent?intent=explore_start')">Explore Start <small>(Khám phá)</small></button>
+          <button onclick="sendForm('/api-sdk/cloud_intent?intent=intent_imperative_dance')">Listen for Beat <small>(Nghe nhịp)</small></button>
+          <button onclick="sendForm('/api-sdk/cloud_intent?intent=intent_system_sleep')">Go to Sleep <small>(Đi ngủ)</small></button>
+          <button onclick="sendForm('/api-sdk/cloud_intent?intent=intent_imperative_fetchcube')">Fetch Cube <small>(Lấy khối)</small></button>
+          <button onclick="sendForm('/api-sdk/cloud_intent?intent=intent_system_charger')">Go Home <small>(Về dock)</small></button>
         </div>
         <hr class="small-hr">
-        <h3 class="center">Trigger Hey Vector</h3>
+        <h3 class="center">Trigger Hey Vector <small>(Kích « Hey Vector »)</small></h3>
         <p class="center">Trigger the "Hey Vector" wakeword remotely</p>
-        <p class="center">(Only Dev firmware and 2.0.1.6085ep or later)</p>
+        <p class="center">(Only Dev firmware and 2.0.1.6085ep or later) <small><em>Chỉ firmware Dev và 2.0.1.6085ep trở lên.</em></small></p>
         <div id="heyVectorStatus" class="center"></div>
         <div class="center">
-          <button onclick="triggerHeyVector()">Trigger "Hey Vector"</button>
+          <button onclick="triggerHeyVector()">Trigger "Hey Vector" <small>(Kích hoạt)</small></button>
         </div>
         <hr>
       </div>
 
       <div id="section-stim" class="toggleable-section" style="display:none;">
-        <h2 class="center">Stimulation</h2>
+        <h2 class="center">Stimulation <small style="font-weight:normal;opacity:.85;">(Kích thích / Stim)</small></h2>
         <hr class="small-hr">
         <div class="center">
           <canvas id="stimChart"></canvas>
@@ -197,18 +192,18 @@
       </div>
 
       <div id="section-stats" class="toggleable-section" style="display:none;">
-        <h2 class="center">Statistics</h2>
+        <h2 class="center">Statistics <small style="font-weight:normal;opacity:.85;">(Thống kê)</small></h2>
         <hr class="small-hr">
-        <button onclick="updateStats()">Refresh</button><br>
+        <button onclick="updateStats()">Refresh <small>(Làm mới)</small></button><br>
         <div id="statsSection"></div>
         <hr>
       </div>
 
       <div id="section-photos" class="toggleable-section" style="display:none;">
-        <h2 class="center">Photos</h2>
+        <h2 class="center">Photos <small style="font-weight:normal;opacity:.85;">(Ảnh chụp)</small></h2>
         <hr class="small-hr">
         <div class="center">
-          <button onclick="getPhotos()">Refresh List</button>
+          <button onclick="getPhotos()">Refresh List <small>(Làm mới danh sách)</small></button>
         </div>
         <div class="center">
           <div id="photoSection"></div>
@@ -217,7 +212,7 @@
       </div>
 
       <div id="section-locale" class="toggleable-section" style="display:none;">
-        <h2 class="center">Locale</h2>
+        <h2 class="center">Locale <small style="font-weight:normal;opacity:.85;">(Ngôn ngữ vùng)</small></h2>
         <hr class="small-hr">
         <div id="currentLocale" class="center"></div>
         <div style="text-align: left;" class="center">
@@ -251,17 +246,17 @@
       </div>
 
       <div id="section-time" class="toggleable-section" style="display:none;">
-        <h2 class="center">Time Format</h2>
+        <h2 class="center">Time Format <small style="font-weight:normal;opacity:.85;">(Định dạng giờ)</small></h2>
         <hr class="small-hr">
         <div id="currentTimeSet" class="center"></div>
         <div style="text-align: left;" class="center">
           <label>
             <input type="radio" name="time" id="12 Hour" value="12 Hour"
-              onclick="sendForm('/api-sdk/time_format_12')">12 Hour<br>
+              onclick="sendForm('/api-sdk/time_format_12')">12 Hour <small>(12 giờ)</small><br>
           </label>
           <label>
             <input type="radio" name="time" id="24 Hour" value="24 Hour"
-              onclick="sendForm('/api-sdk/time_format_24')">24 Hour<br>
+              onclick="sendForm('/api-sdk/time_format_24')">24 Hour <small>(24 giờ)</small><br>
           </label>
         </div>
         <br>
@@ -269,17 +264,17 @@
       </div>
 
       <div id="section-temp" class="toggleable-section" style="display:none;">
-        <h2 class="center">Temp Format</h2>
+        <h2 class="center">Temp Format <small style="font-weight:normal;opacity:.85;">(Đơn vị nhiệt độ)</small></h2>
         <hr class="small-hr">
         <div id="currentTempFormat" class="center"></div>
         <div style="text-align: left;" class="center">
           <label>
             <input type="radio" name="temp" id="Celsius" value="Celsius"
-              onclick="sendForm('/api-sdk/temp_c')">Celsius<br>
+              onclick="sendForm('/api-sdk/temp_c')">Celsius <small>(°C)</small><br>
           </label>
           <label>
             <input type="radio" name="temp" id="Fahrenheit" value="Fahrenheit"
-              onclick="sendForm('/api-sdk/temp_f')">Fahrenheit<br>
+              onclick="sendForm('/api-sdk/temp_f')">Fahrenheit <small>(°F)</small><br>
           </label>
         </div>
         <br>
@@ -287,17 +282,17 @@
       </div>
 
       <div id="section-button" class="toggleable-section" style="display:none;">
-        <h2 class="center">Button Action</h2>
+        <h2 class="center">Button Action <small style="font-weight:normal;opacity:.85;">(Chức năng nút)</small></h2>
         <hr class="small-hr">
         <div id="currentButton" class="center"></div>
         <div style="text-align: left;" class="center">
           <label>
             <input type="radio" name="but" id="Hey Vector" value="Hey Vector"
-              onclick="sendForm('/api-sdk/button_hey_vector')">Hey Vector<br>
+              onclick="sendForm('/api-sdk/button_hey_vector')">Hey Vector <small>(Đánh thức Vector)</small><br>
           </label>
           <label>
             <input type="radio" name="but" id="Alexa" value="Alexa"
-              onclick="sendForm('/api-sdk/button_alexa')">Alexa<br>
+              onclick="sendForm('/api-sdk/button_alexa')">Alexa <small>(Alexa)</small><br>
           </label>
         </div>
         <br>
@@ -305,34 +300,34 @@
       </div>
 
       <div id="section-alexa" class="toggleable-section" style="display:none;">
-        <h2 class="center">Alexa</h2>
+        <h2 class="center">Alexa <small style="font-weight:normal;opacity:.85;">(Amazon Alexa)</small></h2>
         <hr class="small-hr">
         <div id="alexaStatus" class="center"></div>
         <a class="center" target="_blank" rel="noopener noreferrer"
           href="https://amazon.com/code">https://amazon.com/code</a>
         <hr class="small-hr">
         <div class="center">
-          <button onclick="sendForm('/api-sdk/alexa_sign_in')">Signin Alexa</button>
-          <button onclick="sendForm('/api-sdk/alexa_sign_out')">Signout Alexa</button>
+          <button onclick="sendForm('/api-sdk/alexa_sign_in')">Signin Alexa <small>(Đăng nhập)</small></button>
+          <button onclick="sendForm('/api-sdk/alexa_sign_out')">Signout Alexa <small>(Đăng xuất)</small></button>
         </div>
         <hr>
       </div>
 
       <div id="section-location" class="toggleable-section" style="display:none;">
-        <h2 class="center">Set Location</h2>
+        <h2 class="center">Set Location <small style="font-weight:normal;opacity:.85;">(Đặt vị trí)</small></h2>
         <hr class="small-hr">
         <div id="currentLocation"></div>
-        <small class="desc">Example: San Francisco, California</small>
+        <small class="desc">Example: San Francisco, California / Ví dụ: Ho Chi Minh City, Vietnam</small>
         <div class="center">
-          <input class="tinput" id="locationInput" name="locationInput" type="text" placeholder="Put location here">
+          <input class="tinput" id="locationInput" name="locationInput" type="text" placeholder="Put location here (Nhập địa điểm)">
         </div>
         <hr class="small-hr">
-        <button onclick="sendLocation()">Submit Location</button>
+        <button onclick="sendLocation()">Submit Location <small>(Lưu vị trí)</small></button>
         <hr>
       </div>
 
       <div id="section-timezone" class="toggleable-section" style="display:none;">
-        <h2 style="margin-bottom:0px;">Set Time Zone</h2>
+        <h2 style="margin-bottom:0px;">Set Time Zone <small style="font-weight:normal;opacity:.85;">(Múi giờ)</small></h2>
         <hr class="small-hr">
         <div id="currentTimeZone" class="center"></div>
         <div class="center">
@@ -384,10 +379,14 @@
         </div>
         <br />
         <hr class="small-hr">
-        <button onclick="sendTimeZone()">Submit Time Zone</button>
+        <button onclick="sendTimeZone()">Submit Time Zone <small>(Lưu múi giờ)</small></button>
         <hr>
       </div>
 
+      <footer class="site-footer" style="margin-top: 2em; padding: 16px 8px; font-size: 0.88em; text-align: center; border-top: 1px solid rgba(255,255,255,0.12); color: #9aa0a6;">
+        <p style="margin: 0 0 6px 0;">© 2025 <strong>Võ Duy Linh</strong></p>
+        <p style="margin: 0;">Liên hệ Zalo: <strong>0375114564</strong></p>
+      </footer>
     </div>
   </div>
 

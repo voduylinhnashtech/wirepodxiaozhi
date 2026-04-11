@@ -611,13 +611,16 @@ function updateColor(id) {
   });
 
   const targetElement = document.getElementById(l_id);
+  if (!targetElement) {
+    return;
+  }
   targetElement.classList.remove("notselectedicon");
   targetElement.classList.add("selectedicon");
 }
 
 
 function showLog() {
-  toggleVisibility(["section-intents", "section-log", "section-botauth", "section-version", "section-uicustomizer"], "section-log", "icon-Logs");
+  toggleVisibility(["section-log", "section-botauth", "section-uicustomizer"], "section-log", "icon-Logs");
   logDivArea = getE("botTranscriptedTextArea");
   getE("logscrollbottom").checked = true;
   logP = document.createElement("p");
@@ -637,57 +640,6 @@ function showLog() {
         }
       });
   }, 500);
-}
-
-function checkUpdate() {
-  displayMessage("cVersion", "Checking for updates...");
-  displayMessage("aUpdate", "");
-  displayMessage("cCommit", "");
-  fetch("/api/get_version_info")
-    // type VersionInfo struct {
-    // 	FromSource      bool   `json:"fromsource"`
-    // 	InstalledVer    string `json:"installedversion"`
-    // 	InstalledCommit string `json:"installedcommit"`
-    // 	CurrentVer      string `json:"currentver"`
-    // 	CurrentCommit   string `json:"currentcommit"`
-    // 	UpdateAvailable bool   `json:"avail"`
-    // }
-    .then((response) => response.text())
-    .then((response) => {
-      if (response.includes("error")) {
-        // <p id="cVersion"></p>
-        // <p style="display: none;" id="cCommit"></p>
-        // <p id="aUpdate"></p>
-        displayMessage(
-          "cVersion",
-          "There was an error: " + response
-        );
-        getE("updateGuideLink").style.display = "none";
-      } else {
-        const parsed = JSON.parse(response);
-        if (parsed.fromsource) {
-          if (!parsed.avail) {
-            displayMessage("aUpdate", `You are on the latest version.`);
-            getE("updateGuideLink").style.display = "none";
-          } else {
-            displayMessage("aUpdate", `A newer version of WirePod (commit: ${parsed.currentcommit}) is available! Use this guide to update WirePod: `);
-            getE("updateGuideLink").style.display = "block";
-          }
-          displayMessage("cVersion", `Installed Commit: ${parsed.installedcommit}`);
-        } else {
-          displayMessage("cVersion", `Installed Version: ${parsed.installedversion}`);
-          displayMessage("cCommit", `Based on wire-pod commit: ${parsed.installedcommit}`);
-          getE("cCommit").style.display = "block";
-          if (parsed.avail) {
-            displayMessage("aUpdate", `A newer version of WirePod (${parsed.currentversion}) is available! Use this guide to update WirePod: `);
-            getE("updateGuideLink").style.display = "block";
-          } else {
-            displayMessage("aUpdate", "You are on the latest version.");
-            getE("updateGuideLink").style.display = "none";
-          }
-        }
-      }
-    });
 }
 
 function showLanguage() {
@@ -726,15 +678,6 @@ function updateSTTInfo() {
     .catch((error) => {
       console.error("Error fetching STT info:", error);
     });
-}
-
-function showVersion() {
-  toggleVisibility(["section-log", "section-botauth", "section-intents", "section-version", "section-uicustomizer"], "section-version", "icon-Version");
-  checkUpdate();
-}
-
-function showIntents() {
-  toggleVisibility(["section-log", "section-botauth", "section-intents", "section-version", "section-uicustomizer", "section-xiaozhi-pairing"], "section-intents", "icon-Intents");
 }
 
 // Biến global để lưu MAC address đã chọn
@@ -777,7 +720,7 @@ function updateStepStatus(stepNum, status, message) {
 }
 
 function showXiaozhiPairing() {
-  toggleVisibility(["section-log", "section-botauth", "section-intents", "section-version", "section-uicustomizer", "section-xiaozhi-pairing"], "section-xiaozhi-pairing", "icon-XiaozhiPairing");
+  toggleVisibility(["section-log", "section-botauth", "section-uicustomizer", "section-xiaozhi-pairing"], "section-xiaozhi-pairing", "icon-XiaozhiPairing");
   
   // Reset trạng thái các bước
   updateStepStatus(1, 'pending', '⏳ Đang chờ');
@@ -1552,8 +1495,16 @@ function toggleVisibility(sections, sectionToShow, iconId) {
     GetLog = false;
   }
   sections.forEach((section) => {
-    getE(section).style.display = "none";
+    const el = document.getElementById(section);
+    if (el) {
+      el.style.display = "none";
+    }
   });
-  getE(sectionToShow).style.display = "block";
-  updateColor(iconId);
+  const showEl = document.getElementById(sectionToShow);
+  if (showEl) {
+    showEl.style.display = "block";
+  }
+  if (iconId) {
+    updateColor(iconId);
+  }
 }

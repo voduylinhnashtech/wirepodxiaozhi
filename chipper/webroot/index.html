@@ -2,7 +2,7 @@
 <html>
 
 <head>
-  <title>Wire-Pod</title>
+  <title>Server cho Vector · Wire-Pod</title>
   <!-- Meta Apple tags for a PWA like experience. -->
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
@@ -18,109 +18,40 @@
 <body>
   <div id="outer">
     <div id="content" class="">
-      <h1>Wire-Pod</h1>
-      <!-- Bot stats, connected and battery -->
+      <h1>Server cho Vector <small style="font-weight: normal; opacity: 0.85;">(Wire-Pod)</small></h1>
+      <!-- Bot stats: trạng thái kết nối & pin -->
       <div id="botStats"></div>
       <hr />
 
       <div class="main-nav-parent">
         <!--WP settings-->
         <div class="main-nav-child">
-          <a href="setup.html"><i class="fa-solid fa-gear"></i><br />Server Settings</a>
+          <a href="setup.html"><i class="fa-solid fa-gear"></i><br />Server Settings<br /><small>(Cài đặt máy chủ)</small></a>
         </div>
         <!--Bot Settings-->
         <div class="main-nav-child">
-          <a href="/sdkapp"><i class="fa solid fa-toolbox"></i><br />Bot Settings</a>
+          <a href="/sdkapp"><i class="fa solid fa-toolbox"></i><br />Bot Settings<br /><small>(Cài đặt bot)</small></a>
         </div>
         <!--Bot Setup-->
         <div class="main-nav-child">
           <a href="#" onclick="showBotAuth(); return false;"><i class="fa solid fa-robot" id="icon-BotAuth"
-              name="icon"></i><br />Bot Setup</a>
-        </div>
-        <!--Custom Intents-->
-        <div class="main-nav-child">
-          <a href="#" onclick="showIntents(); return false;"><i class="fa-solid fa-microphone-lines" id="icon-Intents"
-              name="icon"></i><br />Custom Intents</a>
+              name="icon"></i><br />Bot Setup<br /><small>(Thiết lập bot)</small></a>
         </div>
         <!--Logs-->
         <div class="main-nav-child">
           <a href="#" onclick="showLog(); return false;"><i class="fa-solid fa-file-lines" id="icon-Logs"
-              name="icon"></i><br />Log</a>
-        </div>
-        <!--Version-->
-        <div class="main-nav-child">
-          <a href="#" onclick="showVersion(); return false;"><i class="fa-solid fa-code-compare" id="icon-Version"
-              name="icon"></i><br />Version Info</a>
+              name="icon"></i><br />Log<br /><small>(Nhật ký)</small></a>
         </div>
         <!--UI Customizer-->
         <div class="main-nav-child">
           <a href="#" onclick="showUICustomizer(); return false;"><i class="fa-solid fa-pen-nib" id="icon-Customizer"
-              name="icon"></i><br />UI Settings</a>
+              name="icon"></i><br />UI Settings<br /><small>(Giao diện)</small></a>
         </div>
       </div>
       <hr />
 
-      <div id="section-intents" style="display: none">
-        <h2 id="foldable-add" onclick="toggleSection('content-add', 'content-edit')">
-          <span>+</span>
-          Add a custom intent
-        </h2>
-        <div class="content" id="content-add">
-          <p>
-            For more details, see
-            <a href="https://github.com/kercre123/wire-pod/wiki/Custom-Intents" target="_blank">the Custom Intents page of the wiki</a>
-          </p>
-          <div id="addIntentStatus"></div>
-          <form id="intentAddForm">
-            <label for="nameAdd">Custom intent name:</label>
-            <input type="text" name="nameAdd" id="nameAdd" /><br />
-            <label for="descriptionAdd">Custom intent description:</label>
-            <input type="text" name="descriptionAdd" id="descriptionAdd" /><br />
-            <label for="utterancesAdd">Utterances that will trigger the intent (separated by
-              ,):</label>
-            <input type="text" name="utterancesAdd" id="utterancesAdd" /><br />
-            <div id="intentAddSelect"></div>
-            <label for="paramnameAdd">Intent parameter name (not required):</label>
-            <input type="text" name="paramnameAdd" id="paramnameAdd" /><br />
-            <label for="paramvalueAdd">Intent parameter value (not required):</label>
-            <input type="text" name="paramvalueAdd" id="paramvalueAdd" /><br />
-            <label for="execAdd">Path to script/program to execute after sending intent (not
-              required):</label>
-            <input type="text" name="execAdd" id="execAdd" /><br />
-            <label for="execAdd">Arguments for script/program (seperated by ,) (not required):</label>
-            <input type="text" name="execAddArgs" id="execAddArgs" size="50" /><br />
-            <label for="luaAdd">Lua code to run (not required):</label>
-            <textarea id="luaAdd"></textarea>
-          </form>
-          <div>
-            <button onclick="sendIntentAdd()">Add intent</button>
-          </div>
-          <hr />
-        </div>
-
-        <h2 id="foldable-edit" onclick="toggleSection('content-edit', 'content-add')">
-          <span>+</span>
-          Edit/delete a custom intent
-        </h2>
-        <div class="content" id="content-edit">
-          <div id="editSelect"></div>
-          <div id="editIntentStatus"></div>
-          <div id="deleteIntentStatus"></div>
-          <div>
-            <div>
-              <button onclick="editFormCreate()">Edit selected intent</button>
-              <button onclick="deleteSelectedIntent()">
-                Delete selected intent
-              </button>
-            </div>
-          </div>
-          <div id="editIntentForm"></div>
-          <hr />
-        </div>
-      </div>
-
       <div id="section-botauth" style="display: none">
-        <h2>Authentication</h2>
+        <h2>Authentication <small>(Xác thực)</small></h2>
         <hr class="small-hr">
         <div>
           <div id="disconnectButton"></div>
@@ -130,48 +61,49 @@
         </div>
         <hr />
         <div>
-          <h3>Manual botSdkInfo (ESN / LAN IP / GUID)</h3>
+          <h3>Manual botSdkInfo (ESN / LAN IP / GUID) <small>(Thủ công)</small></h3>
           <hr class="small-hr">
           <small class="desc">
             Use this if you want to manually configure robot connection info (used for SDK/gRPC calls like SayText / audio playback).
             IP should be the robot's LAN IPv4 (no <code>:443</code>). ESN is the robot serial (8 hex chars). You can leave GUID blank and Wire-Pod will generate one on Save.
+            <br /><em>Dùng khi cấu hình tay thông tin kết nối robot (SDK/gRPC). IP là IPv4 LAN (không gồm :443). ESN là serial 8 ký tự hex. GUID có thể để trống.</em>
           </small>
           <div id="manualBotInfoStatus" style="margin-top: 10px;"></div>
           <div class="manual-botinfo-card">
-            <label for="manualEsnSelect">ESN (Serial):</label><br />
+            <label for="manualEsnSelect">ESN (Serial): <small>(Số serial robot)</small></label><br />
             <div class="manual-botinfo-row">
               <select class="tinput" id="manualEsnSelect" name="manualEsnSelect" style="font-family: monospace; min-width: 260px;" onchange="onManualEsnChange()">
-                <option value="">Loading...</option>
+                <option value="">Loading… (Đang tải…)</option>
               </select>
-              <button onclick="openDeleteBotInfoModal()">Delete</button>
+              <button onclick="openDeleteBotInfoModal()">Delete <small>(Xóa)</small></button>
             </div>
             <small class="desc">Chọn ESN có sẵn hoặc chọn "➕ New ESN..." để thêm ESN mới.</small><br />
             <input class="tinput" type="text" id="manualEsn" name="manualEsn" placeholder="e.g. 00603f9b" style="font-family: monospace; display: none;" /><br />
-            <label for="manualLanIp">LAN IP (robot):</label><br />
-            <input class="tinput" type="text" id="manualLanIp" name="manualLanIp" placeholder="e.g. 192.168.1.150" style="font-family: monospace;" /><br />
-            <label for="manualGuid">GUID / Token:</label><br />
-            <input class="tinput" type="text" id="manualGuid" name="manualGuid" placeholder="(optional) leave blank to auto-generate" style="font-family: monospace;" /><br />
+            <label for="manualLanIp">LAN IP (robot): <small>(IP mạng LAN của robot)</small></label><br />
+            <input class="tinput" type="text" id="manualLanIp" name="manualLanIp" placeholder="e.g. 192.168.1.150 (vd. 192.168.1.150)" style="font-family: monospace;" /><br />
+            <label for="manualGuid">GUID / Token: <small>(Mã định danh / token)</small></label><br />
+            <input class="tinput" type="text" id="manualGuid" name="manualGuid" placeholder="(optional) leave blank to auto-generate — để trống để tự tạo" style="font-family: monospace;" /><br />
 
-            <label for="manualAppTokensHash">vic.AppTokens hash (optional but useful for migrate):</label><br />
+            <label for="manualAppTokensHash">vic.AppTokens hash <small>(tùy chọn, hữu ích khi migrate)</small>:</label><br />
             <input class="tinput" type="text" id="manualAppTokensHash" name="manualAppTokensHash"
-              placeholder='Paste hash from jdocs.json (e.g. mne81Zf...=)' style="font-family: monospace;" /><br />
+              placeholder="Paste hash from jdocs.json (vd. dán hash từ jdocs.json)" style="font-family: monospace;" /><br />
             <small class="desc">
               Đây là <b>hash</b> trong <code>jdocs.json → vic.AppTokens → json_doc → client_tokens[0].hash</code>.
               Bấm "Save AppTokens" để ghi/merge vào jdocs.json máy này.
             </small>
             <details style="margin-top: 10px;">
-              <summary>Optional: GlobalGUID (fallback)</summary>
-              <small class="desc">Used only when a robot entry doesn't have its own GUID.</small><br />
-              <label for="manualGlobalGuid">GlobalGUID:</label><br />
+              <summary>Optional: GlobalGUID (fallback) <small>(GUID toàn cục — dự phòng)</small></summary>
+              <small class="desc">Used only when a robot entry doesn't have its own GUID. / Chỉ dùng khi mục robot không có GUID riêng.</small><br />
+              <label for="manualGlobalGuid">GlobalGUID: <small>(mã toàn cục)</small></label><br />
               <input class="tinput" type="text" id="manualGlobalGuid" name="manualGlobalGuid" placeholder="e.g. tni1TRsTRTaNSapjo0Y+Sw==" style="font-family: monospace;" />
             </details>
             <hr class="small-hr">
-            <button onclick="loadManualBotInfo()">Load current</button>
-            <button onclick="saveManualBotInfo()">Save</button>
-            <button onclick="saveManualAppTokens()">Save AppTokens</button>
+            <button onclick="loadManualBotInfo()">Load current <small>(Tải cấu hình)</small></button>
+            <button onclick="saveManualBotInfo()">Save <small>(Lưu)</small></button>
+            <button onclick="saveManualAppTokens()">Save AppTokens <small>(Lưu AppTokens)</small></button>
 
             <hr class="small-hr">
-            <h4 style="margin: 8px 0;">Export / Import</h4>
+            <h4 style="margin: 8px 0;">Export / Import <small>(Xuất / nhập)</small></h4>
             <small class="desc">Xuất/nhập gói cấu hình để chuyển bot sang máy khác (botSdkInfo + session-certs + .anki_vector + jdocs cho bot).</small>
             <div class="manual-botinfo-row" style="margin-top: 10px;">
               <button onclick="exportBotAuthBundle()">Export (.zip)</button>
@@ -185,90 +117,80 @@
         <!-- Delete confirmation modal -->
         <div id="deleteBotInfoModal" class="wp-modal-overlay" style="display:none;" onclick="closeDeleteBotInfoModal(true)">
           <div class="wp-modal" onclick="event.stopPropagation()">
-            <h3 style="margin-top: 0;">Confirm delete</h3>
-            <p id="deleteBotInfoModalText" style="margin-top: 8px;">Are you sure?</p>
+            <h3 style="margin-top: 0;">Confirm delete <small>(Xác nhận xóa)</small></h3>
+            <p id="deleteBotInfoModalText" style="margin-top: 8px;">Are you sure? <small>(Bạn chắc chắn?)</small></p>
             <div class="wp-modal-actions">
-              <button onclick="closeDeleteBotInfoModal(true)">Cancel</button>
-              <button class="danger" onclick="confirmDeleteManualBotInfo()">Delete</button>
+              <button onclick="closeDeleteBotInfoModal(true)">Cancel <small>(Hủy)</small></button>
+              <button class="danger" onclick="confirmDeleteManualBotInfo()">Delete <small>(Xóa)</small></button>
             </div>
           </div>
         </div>
         <hr />
         <div>
-          <h3>Configure an OSKR/dev-unlocked robot</h3>
+          <h3>Configure an OSKR/dev-unlocked robot <small>(OSKR / mở khóa)</small></h3>
           <hr class="small-hr">
-          <small class="desc">Works with firmware 1.4 and above.</small>
+          <small class="desc">Works with firmware 1.4 and above. / Tương thích firmware 1.4 trở lên.</small>
           <div id="oskrSetupProgress"></div>
           <div id="oskrSetup">
             <p><b>If you have an OSKR/dev-unlocked bot;</b> enter the bot's IP
               address and upload the bot's SSH key here, then click "Set up
               bot". After that, use the above section to finish setting up
               your bot.</p>
+            <p><em>Nếu bạn có bot OSKR/mở khóa dev: nhập IP robot, tải khóa SSH, bấm « Set up bot », sau đó hoàn tất ở mục phía trên.</em></p>
             <hr class="small-hr">
-            <input class="tinput" type="text" id="sshIp" name="sshIp" placeholder="Bot IP address" /><br />
+            <input class="tinput" type="text" id="sshIp" name="sshIp" placeholder="Bot IP address (Địa chỉ IP bot)" /><br />
+            <label><small>SSH key file / Tệp khóa SSH:</small></label><br />
             <input type="file" id="sshKeyFile" name="sshKeyFile" /><br />
             <hr class="small-hr">
-            <button onclick="doSSHSetup()">Set up bot</button>
+            <button onclick="doSSHSetup()">Set up bot <small>(Thiết lập bot)</small></button>
           </div>
         </div>
         <hr />
       </div>
 
       <div id="section-log" style="display: none">
-        <h2>Log</h2>
+        <h2>Log <small>(Nhật ký)</small></h2>
         <hr class="small-hr">
         <div class="center">
           <div style="text-align:left">
             <input id="logdebug" name="logdebug" type="checkbox" />
-            <label class="checkbox-label" for="logdebug">Show all logs</label><br />
+            <label class="checkbox-label" for="logdebug">Show all logs <small>(Toàn bộ log)</small></label><br />
             <input id="logscrollbottom" name="logscrollbottom" type="checkbox" />
-            <label class="checkbox-label" for="logscrollbottom">Scroll to bottom</label>
+            <label class="checkbox-label" for="logscrollbottom">Scroll to bottom <small>(Cuộn xuống cuối)</small></label>
           </div>
         </div>
         <textarea id="botTranscriptedTextArea" rows="7" cols="50">
-          loading log...
+          loading log… (đang tải nhật ký…)
         </textarea>
         <hr class="log-hr" />
       </div>
 
-      <div id="section-version" style="display: none">
-        <h2>Version</h2>
+      <div id="section-uicustomizer" style="display: none">
+        <h2>UI Customizer <small>(Tuỳ chỉnh giao diện)</small></h2>
         <hr class="small-hr">
-        <div id="versionDiv">
-          <button onclick="checkUpdate()">
-            Check For Update
-          </button>
-          <hr class="small-hr">
-          <p id="cVersion"></p>
-          <small class="desc" style="display: none;" id="cCommit"></small>
-          <p id="aUpdate"></p>
-          <a id="updateGuideLink" style="display: none" target="_blank"
-            href="https://github.com/kercre123/wire-pod/wiki/Things-to-Know#updating-wire-pod">Update Guide</a>
-        </div>
+        <p>Accent Color <small>(Màu nhấn)</small></p>
+        <select onchange="setUIColor()" id="accent-color-choose">
+          <option value="teal" selected="selected">Teal — default (Xanh ngọc — mặc định)</option>
+          <option value="orange">Orange (Cam)</option>
+          <option value="yellow">Yellow (Vàng)</option>
+          <option value="lime">Lime (Chanh)</option>
+          <option value="sapphire">Sapphire (Sapphire)</option>
+          <option value="purple">Purple (Tím)</option>
+          <option value="green">Green (Lục)</option>
+        </select>
+        <hr class="small-hr">
+        <p>Body Font <small>(Phông chữ)</small></p>
+        <select onchange="setUIFont()" id="body-font-choose">
+          <option style="font-family: 'DroidSans';" value="droidsans" selected="selected">Droid Sans — default (Mặc định)</option>
+          <option style="font-family: 'IBMVGA';" value="ibmvga">IBM VGA 8x16 — retro (Cổ điển)</option>
+        </select>
         <hr />
       </div>
 
-      <div id="section-uicustomizer" style="display: none">
-        <h2>UI Customizer</h2>
-        <hr class="small-hr">
-        <p>Accent Color</p>
-        <select onchange="setUIColor()" id="accent-color-choose">
-          <option value="teal" selected="selected">Teal (default)</option>
-          <option value="orange">Orange</option>
-          <option value="yellow">Yellow</option>
-          <option value="lime">Lime</option>
-          <option value="sapphire">Sapphire</option>
-          <option value="purple">Purple</option>
-          <option value="green">Green</option>
-        </select>
-        <hr class="small-hr">
-        <p>Body Font</p>
-        <select onchange="setUIFont()" id="body-font-choose">
-          <option style="font-family: 'DroidSans';" value="droidsans" selected="selected">Droid Sans (default)</option>
-          <option style="font-family: 'IBMVGA';" value="ibmvga">IBM VGA 8x16 (retro)</option>
-        </select>
-        <hr />
-      </div>
+      <footer class="site-footer" style="margin-top: 2em; padding: 16px 8px; font-size: 0.88em; text-align: center; border-top: 1px solid rgba(255,255,255,0.12); color: #9aa0a6;">
+        <p style="margin: 0 0 6px 0;">© 2025 <strong>Võ Duy Linh</strong></p>
+        <p style="margin: 0;">Liên hệ Zalo: <strong>0375114564</strong></p>
+      </footer>
 
     </div>
   </div>
@@ -283,9 +205,6 @@
 <!-- <script src="./sdkapp/js/main.js"></script> -->
 <script>
   checkInited();
-  updateIntentSelection("editSelect");
-  updateIntentSelection("deleteSelect");
-  createIntentSelect("intentAddSelect");
   processBotStats();
 </script>
 

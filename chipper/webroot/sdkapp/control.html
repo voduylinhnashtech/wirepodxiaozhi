@@ -2,7 +2,7 @@
 <html>
 
 <head>
-  <title>Vector Web App</title>
+  <title>Vector control · Điều khiển Vector</title>
   <!-- Meta Apple tags for a PWA like experience. -->
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
@@ -18,88 +18,94 @@
 <body onload="updateControlButtons()">
   <div id="outer">
     <div id="content">
-      <h1 class="center">Vector control (beta)</h1>
+      <h1 class="center">Vector control (beta) <small style="font-weight:normal;display:block;font-size:.5em;opacity:.9;">(Điều khiển Vector — beta)</small></h1>
       <hr />
       <div class="main-nav-parent">
         <div class="main-nav-child">
-          <a href="#" onclick="goBackToSettings()"><i class="fa-solid fa-reply"></i><br />Back</a>
+          <a href="#" onclick="goBackToSettings()"><i class="fa-solid fa-reply"></i><br />Back<br /><small>(Quay lại)</small></a>
         </div>
       </div>
       <hr />
 
       <div id="sdkActions">
-        <h2 class="center">Camera Feed</h2>
+        <h2 class="center">Camera Feed <small style="font-weight:normal;opacity:.85;">(Luồng camera)</small></h2>
         <hr class="small-hr">
         <div class="center" id="camStream"></div>
         <div style="text-align: left;" class="center">
           <label>
-            <input type="radio" name="cam" id="cam" onclick="showCamStream()">Begin Camera Stream<br>
+            <input type="radio" name="cam" id="cam" onclick="showCamStream()">Begin Camera Stream <small>(Bật camera)</small><br>
           </label>
           <label>
-            <input type="radio" name="cam" id="cam" onclick="stopCamStream()" checked>Stop Camera Stream<br>
+            <input type="radio" name="cam" id="cam" onclick="stopCamStream()" checked>Stop Camera Stream <small>(Tắt camera)</small><br>
           </label>
         </div>
         <hr />
 
-        <h2 class="center">Behavior Control</h2>
+        <h2 class="center">Behavior Control <small style="font-weight:normal;opacity:.85;">(Điều khiển hành vi)</small></h2>
         <hr class="small-hr">
         <small class="center">You must assume behavior control before performing any action</small>
+        <small class="center" style="display:block;"><em>Phải « Assume » trước khi thao tác.</em></small>
         <div style="text-align: left;" class="center">
           <label>
             <input type="radio" name="control" id="assume_control"
-              onclick="sendForm('/api-sdk/assume_behavior_control?priority=high'); updateControlButtons();">Assume<br>
+              onclick="sendForm('/api-sdk/assume_behavior_control?priority=high'); updateControlButtons();">Assume <small>(Chiếm quyền)</small><br>
           </label>
           <label>
             <input type="radio" name="control" id="release_control"
-              onclick="sendForm('/api-sdk/release_behavior_control'); updateControlButtons();" checked>Release<br>
+              onclick="sendForm('/api-sdk/release_behavior_control'); updateControlButtons();" checked>Release <small>(Nhả quyền)</small><br>
           </label>
         </div>
         <hr />
 
-        <h2 class="center">Move Motors</h2>
+        <h2 class="center">Move Motors <small style="font-weight:normal;opacity:.85;">(Động cơ)</small></h2>
         <hr class="small-hr">
         <small class="center">Toggle Keyboard Controls (unstable) <br> WASD for wheels, R-lift up, F-lift down, T-head
           up, G-head down</small>
+        <small class="center" style="display:block;"><em>Bàn phím (thử nghiệm): WASD bánh xe, R/F nâng, T/G đầu.</em></small>
         <div style="text-align: left;" class="center">
           <label>
-            <input type="radio" name="keycontrol" id="key_control_on" onclick="toggleKeyboard()" disabled>On<br>
+            <input type="radio" name="keycontrol" id="key_control_on" onclick="toggleKeyboard()" disabled>On <small>(Bật)</small><br>
           </label>
           <label>
             <input type="radio" name="keycontrol" id="key_control_off" onclick="toggleKeyboard()" checked
-              disabled>Off<br>
+              disabled>Off <small>(Tắt)</small><br>
           </label>
         </div>
         <hr />
 
-        <h2 class="center">Mirror Mode</h2>
+        <h2 class="center">Mirror Mode <small style="font-weight:normal;opacity:.85;">(Chế độ gương)</small></h2>
         <hr class="small-hr">
         <div style="text-align: left;" class="center">
           <label>
             <input type="radio" name="mirror" id="mirror_on" onclick="sendForm('/api-sdk/mirror_mode?enable=true')"
-              disabled>On<br>
+              disabled>On <small>(Bật)</small><br>
           </label>
           <label>
             <input type="radio" name="mirror" id="mirror_off" onclick="sendForm('/api-sdk/mirror_mode?enable=false')"
-              checked disabled>Off<br>
+              checked disabled>Off <small>(Tắt)</small><br>
           </label>
         </div>
         <hr />
 
-        <h2 class="center">Say Text</h2>
+        <h2 class="center">Say Text <small style="font-weight:normal;opacity:.85;">(Robot nói)</small></h2>
         <div class="center">
-          <input class="tinput" name="textSay" id="textSay" type="text" placeholder="Put text here" disabled />
+          <input class="tinput" name="textSay" id="textSay" type="text" placeholder="Put text here (Nhập nội dung)" disabled />
         </div>
-        <button onclick="sayText()" type="submit">Submit</button>
+        <button onclick="sayText()" type="submit">Submit <small>(Gửi)</small></button>
       <hr />
-      <h2 class="center">Play Audio</h2>
+      <h2 class="center">Play Audio <small style="font-weight:normal;opacity:.85;">(Phát âm thanh)</small></h2>
         <div class="center">
           <input type="file" id="fileInput" accept=".wav">
         </div>
-        <button id="uploadButton" style="display: none;" type="submit">Send Audio</button>
+        <button id="uploadButton" style="display: none;" type="submit">Send Audio <small>(Gửi file)</small></button>
         <div div class="center">
           <audio id="audioOutput" controls></audio>
         </div>
       </div>
+      <footer class="site-footer" style="margin-top: 2em; padding: 16px 8px; font-size: 0.88em; text-align: center; border-top: 1px solid rgba(255,255,255,0.12); color: #9aa0a6;">
+        <p style="margin: 0 0 6px 0;">© 2025 <strong>Võ Duy Linh</strong></p>
+        <p style="margin: 0;">Liên hệ Zalo: <strong>0375114564</strong></p>
+      </footer>
       <hr />
     </div>
     </div>
