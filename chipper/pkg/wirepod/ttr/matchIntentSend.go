@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
-	"regexp"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	pb "github.com/digital-dream-labs/api/go/chipperpb"
@@ -29,15 +29,28 @@ func keyphraseMatchesPartial(voiceText, keyphrase string) bool {
 	if k == "" {
 		return false
 	}
-	// Short tokens: whole-word only (avoids pl "ta"/"tak", it "si", etc. inside longer English words).
+
+	vt := strings.ToLower(voiceText)
+
+	// Short tokens: whole-token only (Unicode-aware) to avoid false positives like "ta" matching inside "take".
+	// Go regexp `\b` is ASCII-centric, so we tokenize ourselves by Unicode letter/number boundaries.
 	if utf8.RuneCountInString(k) <= 4 {
-		re, err := regexp.Compile(`(?i)\b` + regexp.QuoteMeta(k) + `\b`)
-		if err != nil {
-			return strings.Contains(voiceText, k)
+		kTokens := strings.FieldsFunc(k, func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsNumber(r) })
+		vtTokens := strings.FieldsFunc(vt, func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsNumber(r) })
+		if len(kTokens) == 1 {
+			needle := kTokens[0]
+			for _, t := range vtTokens {
+				if t == needle {
+					return true
+				}
+			}
+			return false
 		}
-		return re.MatchString(voiceText)
+		// Multi-token short phrase (rare): fall back to simple contains.
+		return strings.Contains(vt, k)
 	}
-	return strings.Contains(voiceText, k)
+
+	return strings.Contains(vt, k)
 }
 
 func IntentPass(req interface{}, intentThing string, speechText string, intentParams map[string]string, isParam bool) (interface{}, error) {
