@@ -770,6 +770,14 @@ func DoGetImage(msgs []openai.ChatCompletionMessage, param string, robot *vector
 }
 
 func DoNewRequest(robot *vector.Vector) {
+	if robot == nil {
+		logger.Println("DoNewRequest: robot is nil, skipping")
+		return
+	}
+	if robot.Conn == nil {
+		logger.Println(fmt.Sprintf("DoNewRequest: [Device: %s] robot.Conn is nil, skipping", robot.Cfg.SerialNo))
+		return
+	}
 	esn := robot.Cfg.SerialNo
 	logger.Println(fmt.Sprintf("DoNewRequest: [Device: %s] Triggering continuous listening...", esn))
 

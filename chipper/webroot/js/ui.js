@@ -35,7 +35,14 @@ var colorMap = {
 };
 
 function showUICustomizer() {
-    toggleVisibility(["section-log", "section-botauth", "section-uicustomizer"], "section-uicustomizer", "icon-Customizer");
+    toggleVisibility(["section-log", "section-botauth", "section-uicustomizer", "section-intentguide"], "section-uicustomizer", "icon-Customizer");
+}
+
+function showIntentGuide() {
+    toggleVisibility(["section-log", "section-botauth", "section-uicustomizer", "section-intentguide"], "section-intentguide", "icon-IntentGuide");
+    if (typeof loadIntentReference === "function") {
+        loadIntentReference();
+    }
 }
 
 function setUIFont() {

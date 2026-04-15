@@ -24,7 +24,7 @@ function showBotAuth() {
 }
 
 function toggleSections(showSection, icon) {
-  const sections = ["section-log", "section-botauth", "section-uicustomizer"];
+  const sections = ["section-log", "section-botauth", "section-uicustomizer", "section-intentguide"];
   sections.forEach((section) => {
     const el = document.getElementById(section);
     if (el) {

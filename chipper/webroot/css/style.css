@@ -652,3 +652,444 @@ input[type='checkbox']:checked:after {
   margin-left: 5px;
   word-break: break-word;
 }
+
+/* Intent guide: chữ sáng trên nền tối + code không dùng nền sáng wing.css */
+.intent-guide {
+  color: rgba(245, 246, 248, 0.98);
+}
+.intent-guide .ig-text-muted,
+.intent-guide p.ig-text-muted {
+  color: rgba(230, 235, 240, 0.96) !important;
+}
+.intent-guide .ig-text-muted em {
+  color: rgba(205, 214, 224, 0.95);
+}
+.intent-guide code {
+  padding: 0.15rem 0.45rem;
+  margin: 0 0.12rem;
+  font-size: 86%;
+  white-space: normal;
+  word-break: break-word;
+  vertical-align: baseline;
+  background: rgba(255, 255, 255, 0.1) !important;
+  color: #e8edf2 !important;
+  border: 1px solid rgba(255, 255, 255, 0.2) !important;
+  border-radius: 4px;
+  font-family: Consolas, Monaco, Menlo, monospace;
+}
+.intent-guide .ig-kp-list {
+  margin: 4px 0 0;
+  padding-left: 1.15em;
+  color: rgba(248, 250, 252, 0.98);
+}
+.intent-guide .ig-kp-list li {
+  margin: 3px 0;
+  line-height: 1.45;
+}
+.intent-guide .ig-kp-empty {
+  opacity: 0.65;
+  color: rgba(220, 226, 232, 0.9);
+}
+.intent-guide .ig-spotlight-head {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  margin-bottom: 1em;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: rgba(0, 255, 128, 0.07);
+  border: 1px solid rgba(0, 255, 128, 0.22);
+}
+.intent-guide .ig-spotlight-head > i {
+  font-size: 1.65rem;
+  color: var(--fg-color);
+  margin-top: 2px;
+}
+.intent-guide .ig-spotlight-title {
+  margin: 0 0 4px 0;
+  color: var(--fg-color);
+}
+.intent-guide .ig-spot-group {
+  margin-bottom: 1.1em;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  overflow: hidden;
+  background: rgba(0, 0, 0, 0.28);
+}
+.intent-guide .ig-spot-group-hd {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 10px 12px;
+  background: rgba(0, 255, 128, 0.05);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  font-weight: bold;
+  color: var(--fg-color);
+}
+.intent-guide .ig-spot-group-hd i {
+  font-size: 1.2rem;
+  flex-shrink: 0;
+}
+.intent-guide .ig-spot-titles {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.intent-guide .ig-spot-title-main {
+  color: var(--fg-color);
+  font-size: 1.02em;
+}
+.intent-guide .ig-spot-title-sub {
+  font-weight: normal;
+  font-size: 0.88em;
+  opacity: 0.85;
+  color: rgba(215, 222, 230, 0.98);
+}
+.intent-guide .ig-spot-group-body {
+  padding: 8px 12px 12px;
+}
+.intent-guide .ig-spot-intent {
+  display: grid;
+  grid-template-columns: minmax(160px, 240px) 1fr 1fr;
+  gap: 10px 16px;
+  padding: 12px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  align-items: start;
+}
+.intent-guide .ig-spot-intent:last-child {
+  border-bottom: none;
+}
+.intent-guide .ig-spot-intent-name {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 0.88em;
+}
+.intent-guide .ig-spot-intent-name i {
+  color: var(--fg-color);
+  margin-top: 3px;
+  flex-shrink: 0;
+}
+.intent-guide .ig-spot-kp-col .ig-mini {
+  color: rgba(195, 205, 215, 0.95) !important;
+}
+@media (max-width: 900px) {
+  .intent-guide .ig-spot-intent {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Voice intent guide (index.html → Intent Guide) */
+.intent-guide details {
+  margin: 0.75em 0;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  padding: 0.5em 0.75em;
+}
+.intent-guide summary {
+  cursor: pointer;
+  font-weight: bold;
+  color: var(--fg-color);
+}
+.intent-guide .ig-hdr {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px 16px;
+  opacity: 0.85;
+  font-size: 0.85em;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  padding-bottom: 4px;
+  margin: 0.5em 0 6px 0;
+}
+.intent-guide .ig-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px 16px;
+  font-size: 0.92em;
+  margin: 0.35em 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  padding-bottom: 0.35em;
+}
+.intent-guide .ig-row:last-child {
+  border-bottom: none;
+}
+@media (max-width: 520px) {
+  .intent-guide .ig-hdr,
+  .intent-guide .ig-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Intent guide — full table & blackjack cards */
+.intent-guide .ig-page-head {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+}
+.intent-guide .ig-page-logo {
+  flex-shrink: 0;
+  width: 52px;
+  height: 52px;
+  border-radius: 12px;
+  background: linear-gradient(145deg, rgba(0, 255, 128, 0.15), rgba(0, 255, 128, 0.05));
+  border: 1px solid rgba(0, 255, 128, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.5rem;
+  color: var(--fg-color);
+}
+.intent-guide .ig-bj-hero {
+  text-align: center;
+  margin: 1em 0 1.25em;
+  padding: 12px;
+  border-radius: 10px;
+  background: rgba(0, 255, 128, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+.intent-guide .ig-bj-suits {
+  display: inline-flex;
+  gap: 10px;
+  font-size: 1.35rem;
+  margin-bottom: 8px;
+  color: var(--text-color);
+}
+.intent-guide .ig-bj-title {
+  margin: 0 0 6px 0;
+  color: var(--fg-color);
+}
+.intent-guide .ig-bj-lead {
+  margin: 0;
+  font-size: 0.92em;
+}
+.intent-guide .ig-bj-card {
+  margin: 12px 0;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(0, 0, 0, 0.2);
+}
+.intent-guide .ig-bj-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  font-weight: bold;
+  color: var(--fg-color);
+}
+.intent-guide .ig-bj-card-head i {
+  font-size: 1.15rem;
+}
+.intent-guide .ig-code {
+  font-family: monospace;
+  font-size: 0.82em;
+  font-weight: normal;
+  opacity: 0.95;
+  color: var(--text-color);
+}
+.intent-guide .ig-bj-note {
+  margin: 8px 0 10px;
+  line-height: 1.45;
+}
+.intent-guide .ig-mini {
+  display: inline-block;
+  font-size: 0.75em;
+  opacity: 0.9;
+  margin-bottom: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: rgba(195, 205, 215, 0.95);
+}
+.intent-guide .ig-kp-block {
+  margin-bottom: 10px;
+}
+.intent-guide .ig-kp-block div {
+  line-height: 1.5;
+  word-break: break-word;
+}
+.intent-guide .ig-kp-sep {
+  opacity: 0.45;
+}
+.intent-guide .ig-bj-kp-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+@media (max-width: 640px) {
+  .intent-guide .ig-bj-kp-grid {
+    grid-template-columns: 1fr;
+  }
+}
+.intent-guide .ig-lang-label {
+  display: block;
+  font-weight: bold;
+  margin-bottom: 6px;
+  font-size: 0.9em;
+}
+.intent-guide .ig-bj-extra {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px dashed rgba(255, 255, 255, 0.15);
+}
+.intent-guide .ig-exact {
+  margin: 6px 0 0;
+  font-size: 0.85em;
+  opacity: 0.95;
+  color: rgba(230, 235, 240, 0.95);
+}
+.intent-guide .ig-full-title {
+  margin: 1.25em 0 0.5em;
+  color: var(--fg-color);
+}
+.intent-guide .ig-table-wrap {
+  overflow-x: auto;
+  margin: 8px 0 1em;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+.intent-guide table.ig-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.88em;
+}
+.intent-guide .ig-table th,
+.intent-guide .ig-table td {
+  padding: 8px 10px;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  color: rgba(240, 242, 245, 0.98);
+}
+.intent-guide .ig-table td small {
+  color: rgba(200, 208, 218, 0.92);
+}
+.intent-guide .ig-table thead th {
+  background: rgba(0, 255, 128, 0.08);
+  color: var(--fg-color);
+  font-weight: bold;
+}
+.intent-guide .ig-th-icon {
+  width: 36px;
+}
+.intent-guide .ig-td-icon {
+  color: var(--fg-color);
+  font-size: 1rem;
+  text-align: center;
+}
+.intent-guide .ig-td-name code {
+  font-size: 0.92em;
+}
+.intent-guide .ig-badge {
+  display: inline-block;
+  font-size: 0.72em;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(255, 180, 80, 0.2);
+  color: #ffc266;
+  vertical-align: middle;
+}
+/* Bảng intent: hiển thị đầy đủ — không cuộn trong ô (cuộn cả trang). */
+.intent-guide .ig-kp-full {
+  line-height: 1.45;
+  padding-right: 4px;
+}
+.intent-guide details.ig-details {
+  margin: 12px 0;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(0, 0, 0, 0.22);
+  overflow: hidden;
+}
+.intent-guide details.ig-details > summary.ig-details-sum {
+  list-style: none;
+  cursor: pointer;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  padding: 12px 14px;
+  background: rgba(0, 255, 128, 0.07);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  font-weight: bold;
+  color: var(--fg-color);
+  user-select: none;
+}
+.intent-guide details.ig-details > summary.ig-details-sum::-webkit-details-marker {
+  display: none;
+}
+.intent-guide details.ig-details > summary.ig-details-sum::after {
+  content: "▼";
+  margin-left: auto;
+  opacity: 0.75;
+  transition: transform 0.15s ease;
+  font-size: 0.65em;
+  line-height: 1;
+}
+.intent-guide details.ig-details[open] > summary.ig-details-sum::after {
+  transform: rotate(180deg);
+}
+.intent-guide .ig-details-sum > i:first-child {
+  font-size: 1.15rem;
+  opacity: 0.95;
+}
+.intent-guide .ig-details-sum span {
+  font-size: 1.05em;
+}
+.intent-guide .ig-details-sum small {
+  width: 100%;
+  font-weight: normal;
+  opacity: 0.85;
+  color: rgba(215, 222, 230, 0.98);
+  padding-left: 1.75rem;
+  box-sizing: border-box;
+}
+@media (min-width: 640px) {
+  .intent-guide .ig-details-sum small {
+    width: auto;
+    margin-left: auto;
+    padding-left: 0;
+    flex: 1 1 auto;
+    text-align: right;
+  }
+}
+.intent-guide .ig-details-body {
+  padding: 12px 14px 14px;
+}
+.intent-guide .ig-details-intro {
+  margin: 0 0 10px 0;
+  font-size: 0.92em;
+}
+.intent-guide .ig-details-intro > i:first-child {
+  margin-right: 8px;
+  color: var(--fg-color);
+  opacity: 0.95;
+}
+.intent-guide .ig-collapse-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.intent-guide .ig-btn-ig {
+  cursor: pointer;
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(0, 255, 128, 0.35);
+  background: rgba(0, 255, 128, 0.08);
+  color: rgba(240, 245, 248, 0.98);
+  font-family: var(--body-font-family);
+  font-size: 0.9em;
+}
+.intent-guide .ig-btn-ig:hover {
+  background: rgba(0, 255, 128, 0.15);
+  border-color: var(--fg-color);
+}
+.intent-guide .ig-btn-ig small {
+  opacity: 0.85;
+}
+.intent-guide .ig-bj-note strong {
+  color: #fff;
+  font-weight: 600;
+}

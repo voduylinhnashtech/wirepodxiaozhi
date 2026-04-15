@@ -3,6 +3,7 @@ package vars
 import (
 	"encoding/json"
 	"os"
+	"strings"
 
 	"github.com/kercre123/wire-pod/chipper/pkg/logger"
 )
@@ -10,6 +11,15 @@ import (
 // a way to create a JSON configuration for wire-pod, rather than the use of env vars
 
 var ApiConfigPath = "./apiConfig.json"
+
+// Default OpenWeatherMap preset (setup.html shows the same; users may replace the key).
+const (
+	DefaultWeatherProvider = "openweathermap.org"
+	DefaultWeatherAPIKey   = "403a79621d25f8fdee7c468bbd16b820"
+)
+
+// WeatherProviderNone is stored when the user explicitly disables weather in the UI ("None").
+const WeatherProviderNone = "none"
 
 var APIConfig apiConfig
 
@@ -110,16 +120,36 @@ func applyWirepodProductionDefaults() {
 	APIConfig.PastInitialSetup = true
 	APIConfig.HasReadFromEnv = true
 	logger.Println("✅ Defaults applied: EPConfig=true, Port=443, STT=xiaozhi, KG provider=xiaozhi")
+	applyDefaultOpenWeatherMap()
+}
+
+// applyDefaultOpenWeatherMap sets bundled OpenWeatherMap defaults when weather was never configured.
+// Skips if the user saved "None" (provider WeatherProviderNone).
+func applyDefaultOpenWeatherMap() {
+	if strings.TrimSpace(APIConfig.Weather.Provider) == WeatherProviderNone {
+		return
+	}
+	if APIConfig.Weather.Provider != "" || APIConfig.Weather.Key != "" {
+		return
+	}
+	APIConfig.Weather.Provider = DefaultWeatherProvider
+	APIConfig.Weather.Key = DefaultWeatherAPIKey
+	APIConfig.Weather.Enable = true
+	if strings.TrimSpace(APIConfig.Weather.Unit) == "" {
+		APIConfig.Weather.Unit = "C"
+	}
+	logger.Println("🌤 Default weather: OpenWeatherMap key preset (user may change in setup.html)")
 }
 
 func ReadConfig() {
 	if _, err := os.Stat(ApiConfigPath); err != nil {
 		CreateConfigFromEnv()
+		applyDefaultOpenWeatherMap()
 		if !APIConfig.PastInitialSetup {
 			applyWirepodProductionDefaults()
-			writeBytes, _ := json.Marshal(APIConfig)
-			os.WriteFile(ApiConfigPath, writeBytes, 0644)
 		}
+		writeBytes, _ := json.Marshal(APIConfig)
+		os.WriteFile(ApiConfigPath, writeBytes, 0644)
 		logger.Println("API config JSON created")
 		return
 	} else {
@@ -161,6 +191,8 @@ func ReadConfig() {
 			applyWirepodProductionDefaults()
 			logger.Println("ℹ️  Skipping initial.html — defaults saved; open main UI to adjust if needed")
 		}
+
+		applyDefaultOpenWeatherMap()
 
 		writeBytes, _ := json.Marshal(APIConfig)
 		os.WriteFile(ApiConfigPath, writeBytes, 0644)

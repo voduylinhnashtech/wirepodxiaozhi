@@ -101,9 +101,47 @@ func apiHandler(w http.ResponseWriter, r *http.Request) {
 		handleXiaozhiCheckVersion(w, r)
 	case "xiaozhi_get_client_ip":
 		handleXiaozhiGetClientIP(w, r)
+	case "get_intent_reference":
+		handleGetIntentReference(w, r)
 	default:
 		http.Error(w, "not found", http.StatusNotFound)
 	}
+}
+
+// chipperStaticRoot returns the directory that contains intent-data/ (same rules as vars.LoadMultilingualIntents).
+func chipperStaticRoot() string {
+	if runtime.GOOS == "darwin" && vars.Packaged {
+		appPath, _ := os.Executable()
+		return filepath.Join(filepath.Dir(appPath), "..", "Frameworks", "chipper")
+	}
+	if runtime.GOOS == "android" || runtime.GOOS == "ios" {
+		return filepath.Join(vars.AndroidPath, "static")
+	}
+	return "."
+}
+
+func handleGetIntentReference(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	root := chipperStaticRoot()
+	enPath := filepath.Join(root, "intent-data", "en-US.json")
+	viPath := filepath.Join(root, "intent-data", "vi-VN.json")
+
+	var enUS, viVN []vars.JsonIntent
+	if b, err := os.ReadFile(enPath); err == nil {
+		_ = json.Unmarshal(b, &enUS)
+	}
+	if b, err := os.ReadFile(viPath); err == nil {
+		_ = json.Unmarshal(b, &viVN)
+	}
+
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"enUS": enUS,
+		"viVN": viVN,
+	})
 }
 
 // ---- Bot auth bundle export/import (for migrating a robot between machines) ----
@@ -684,8 +722,12 @@ func handleSetWeatherAPI(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
-	if config.Provider == "" {
+	config.Provider = strings.TrimSpace(config.Provider)
+	// "none" = user turned off weather in setup.html (do not re-apply bundled default on next ReadConfig).
+	if config.Provider == "" || config.Provider == vars.WeatherProviderNone {
 		vars.APIConfig.Weather.Enable = false
+		vars.APIConfig.Weather.Provider = vars.WeatherProviderNone
+		vars.APIConfig.Weather.Key = ""
 	} else {
 		vars.APIConfig.Weather.Enable = true
 		vars.APIConfig.Weather.Key = strings.TrimSpace(config.Key)

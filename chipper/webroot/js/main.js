@@ -201,7 +201,8 @@ function sendIntentAdd() {
 }
 
 function checkWeather() {
-  getE("apiKeySpan").style.display = getE("weatherProvider").value ? "block" : "none";
+  const p = getE("weatherProvider").value;
+  getE("apiKeySpan").style.display = p && p !== "none" ? "block" : "none";
 }
 
 function sendWeatherAPIKey() {
@@ -225,12 +226,27 @@ function sendWeatherAPIKey() {
     });
 }
 
+const DEFAULT_WEATHER_PROVIDER = "openweathermap.org";
+const DEFAULT_WEATHER_API_KEY = "403a79621d25f8fdee7c468bbd16b820";
+
 function updateWeatherAPI() {
   fetch("/api/get_weather_api")
     .then((response) => response.json())
     .then((data) => {
-      getE("weatherProvider").value = data.provider;
-      getE("apiKey").value = data.key;
+      let provider = data.provider || "";
+      const key = data.key || "";
+      if (provider === "none") {
+        getE("weatherProvider").value = "none";
+        getE("apiKey").value = "";
+        checkWeather();
+        return;
+      }
+      if (provider === "" && key === "") {
+        provider = DEFAULT_WEATHER_PROVIDER;
+      }
+      getE("weatherProvider").value = provider || DEFAULT_WEATHER_PROVIDER;
+      getE("apiKey").value =
+        key || (getE("weatherProvider").value === DEFAULT_WEATHER_PROVIDER ? DEFAULT_WEATHER_API_KEY : "");
       checkWeather();
     });
 }
@@ -620,7 +636,7 @@ function updateColor(id) {
 
 
 function showLog() {
-  toggleVisibility(["section-log", "section-botauth", "section-uicustomizer"], "section-log", "icon-Logs");
+  toggleVisibility(["section-log", "section-botauth", "section-uicustomizer", "section-intentguide"], "section-log", "icon-Logs");
   logDivArea = getE("botTranscriptedTextArea");
   getE("logscrollbottom").checked = true;
   logP = document.createElement("p");

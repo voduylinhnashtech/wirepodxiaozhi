@@ -42,6 +42,11 @@
           <a href="#" onclick="showLog(); return false;"><i class="fa-solid fa-file-lines" id="icon-Logs"
               name="icon"></i><br />Log<br /><small>(Nhật ký)</small></a>
         </div>
+        <!--Intent command guide-->
+        <div class="main-nav-child">
+          <a href="#" onclick="showIntentGuide(); return false;"><i class="fa-solid fa-book-open" id="icon-IntentGuide"
+              name="icon"></i><br />Intent Guide<br /><small>(Hướng dẫn lệnh)</small></a>
+        </div>
         <!--UI Customizer-->
         <div class="main-nav-child">
           <a href="#" onclick="showUICustomizer(); return false;"><i class="fa-solid fa-pen-nib" id="icon-Customizer"
@@ -165,6 +170,54 @@
         <hr class="log-hr" />
       </div>
 
+      <div id="section-intentguide" class="intent-guide" style="display: none">
+        <div class="ig-page-head">
+          <div class="ig-page-logo" aria-hidden="true"><i class="fa-solid fa-microphone-lines"></i></div>
+          <div>
+            <h2 style="margin: 0 0 4px 0;">Voice intents <small>(Lệnh giọng nói)</small></h2>
+            <p class="ig-text-muted" style="margin: 0;">
+              Dữ liệu lấy trực tiếp từ <code>intent-data/en-US.json</code> và <code>vi-VN.json</code> trên server (API <code>/api/get_intent_reference</code>). Biến môi trường <code>INTENT_LANGS</code> điều chỉnh ngôn ngữ khi <em>khớp</em> lệnh, không ảnh hưởng file hiển thị ở đây.
+              <br /><em>Data is read live from the server JSON files. <code>INTENT_LANGS</code> controls which languages are merged for matching — this page still lists both en-US and vi-VN keyphrases.</em>
+            </p>
+          </div>
+        </div>
+        <hr class="small-hr">
+        <div class="ig-collapse-toolbar">
+          <button type="button" class="ig-btn-ig" id="igBtnExpandAll" title="Expand all sections"><i class="fa-solid fa-angles-down" aria-hidden="true"></i> Mở tất cả <small>(Expand all)</small></button>
+          <button type="button" class="ig-btn-ig" id="igBtnCollapseAll" title="Collapse all sections"><i class="fa-solid fa-angles-up" aria-hidden="true"></i> Thu gọn <small>(Collapse all)</small></button>
+        </div>
+        <p id="intentGuideStatus" class="ig-text-muted" style="min-height:1.5em;"></p>
+
+        <details class="ig-details" open>
+          <summary class="ig-details-sum"><i class="fa-solid fa-spade" aria-hidden="true"></i><span>Blackjack / Xì dách</span><small>Luồng đánh bài — ưu tiên đầu trang</small></summary>
+          <div class="ig-details-body" id="intentGuideBlackjack"></div>
+        </details>
+
+        <details class="ig-details" open>
+          <summary class="ig-details-sum"><i class="fa-solid fa-clock" aria-hidden="true"></i><span>Giờ &amp; báo thức</span><small>Mấy giờ · timer · hủy báo thức / Time &amp; alarms</small></summary>
+          <div class="ig-details-body" id="intentGuideTime"></div>
+        </details>
+
+        <details class="ig-details" open>
+          <summary class="ig-details-sum"><i class="fa-solid fa-cloud-sun" aria-hidden="true"></i><span>Thời tiết</span><small>Dự báo · mưa nắng / Weather</small></summary>
+          <div class="ig-details-body" id="intentGuideWeather"></div>
+        </details>
+
+        <details class="ig-details" open>
+          <summary class="ig-details-sum"><i class="fa-solid fa-star" aria-hidden="true"></i><span>Lệnh hay dùng</span><small>Cube · nhà · ảnh · tên / Quick picks</small></summary>
+          <div class="ig-details-body" id="intentGuideSpotlight"></div>
+        </details>
+
+        <details class="ig-details" open>
+          <summary class="ig-details-sum"><i class="fa-solid fa-table-list" aria-hidden="true"></i><span>Bảng đầy đủ</span><small>Tất cả intent + icon / Full list</small></summary>
+          <div class="ig-details-body" id="intentGuideFull"></div>
+        </details>
+        <p class="ig-text-muted" style="margin-bottom: 0;">
+          Custom intents (tùy chỉnh): <strong>Server Settings</strong> → Custom intents.
+        </p>
+        <hr />
+      </div>
+
       <div id="section-uicustomizer" style="display: none">
         <h2>UI Customizer <small>(Tuỳ chỉnh giao diện)</small></h2>
         <hr class="small-hr">
@@ -199,6 +252,7 @@
 <script src="./js/main.js"></script>
 <script src="./js/ble.js"></script>
 <script src="./js/ssh.js"></script>
+<script src="./js/intent-guide.js"></script>
 <script src="./js/ui.js"></script>
 <script src="./sdkapp/js/common.js"></script>
 <script src="./js/battery.js"></script>

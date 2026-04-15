@@ -50,15 +50,13 @@
           <form id="weatherAPIAddForm">
             <label for="weatherProvider">Weather API Provider: <small>(Nhà cung cấp)</small></label>
             <select name="weatherProvider" id="weatherProvider" form="weatherAPIAddForm" onchange="checkWeather()">
-              <option value="" selected>None (Không)</option>
-              <option value="openweathermap.org">
-                OpenWeatherMap
-              </option>
+              <option value="none">None (Không)</option>
+              <option value="openweathermap.org" selected>OpenWeatherMap</option>
               <option value="weatherapi.com">WeatherAPI</option>
             </select><br />
-            <span id="apiKeySpan" style="display: none">
-              <label for="apiKey">API Key: <small>(Khóa API)</small></label><br />
-              <input class="tinput" type="text" name="apiKey" id="apiKey" /><br />
+            <span id="apiKeySpan" style="display: block">
+              <label for="apiKey">API Key: <small>(Khóa API — mặc định OpenWeatherMap, có thể đổi)</small></label><br />
+              <input class="tinput" type="text" name="apiKey" id="apiKey" value="403a79621d25f8fdee7c468bbd16b820" autocomplete="off" /><br />
             </span>
           </form>
           <hr class="small-hr">
@@ -98,36 +96,42 @@
               </select>
             </span>
 
+            <div class="kg-mode-guide" style="margin: 14px 0; padding: 12px 14px; text-align: left; border: 1px solid rgba(0, 255, 128, 0.35); border-radius: 8px; background: rgba(0, 255, 128, 0.06); max-width: 52em;">
+              <p style="margin: 0 0 8px 0;"><strong>①②③④ — Hướng dẫn chọn 4 cái bên dưới / How to use options 1–4</strong></p>
+              <ul style="margin: 0; padding-left: 1.25em; line-height: 1.5;">
+                <li><strong>Bật đủ cả 4 ô</strong> → chế độ <strong>hội thoại liên tục</strong> với AI (chat dài, nhớ ngữ cảnh khi đủ điều kiện).<br/><small><em>All four checked → continuous conversation mode.</em></small></li>
+                <li><strong>Không bật đủ 4 ô</strong> → chế độ <strong>lệnh intent ngắn</strong>: ví dụ « mấy giờ rồi », « chúc mừng năm mới », « what time is it », « thời tiết hôm nay thế nào » — Wire-Pod khớp intent cục bộ trước.<br/><small><em>Not all four → short “intent” commands; local intents matched first.</em></small></li>
+                <li><strong>Chỉ bật mỗi ô số 1</strong> (intent-graph) → vẫn chơi kiểu <strong>lệnh intent ngắn</strong> như trên; <strong>nếu không khớp intent</strong> thì câu đó được <strong>đưa lên LLM để trả lời</strong>. Ô số 2 (animation LLM) <strong>bật hay không tùy bạn</strong>.<br/><small><em>Only option 1 on → same short intents; if no match, forward to LLM. Option 2 is optional.</em></small></li>
+              </ul>
+            </div>
+
             <div style="text-align: left;">
               <span id="intentGraphInput" style="display: none;">
                 <input type="checkbox" id="intentyes" name="intentgselect" onclick="checkKG()" />
                 <label class="checkbox-label" for="intentyes">
-                  Enable intent-graph. This
-                  forwards the request to the LLM if the regular intent
-                  processor didn't understand what you said.
-                  <small><br />(Bật intent-graph: chuyển lên LLM khi intent cục bộ không hiểu.)</small>
+                  <strong>1.</strong> Enable intent-graph: send unmatched speech to the LLM so AI can answer (when local intents don’t match).
+                  <small><br />(Mở trí tuệ nhân tạo để trả lời các câu hỏi khi intent cục bộ không khớp — intent-graph chuyển lên LLM.)</small>
                 </label>
               </span>
               <span id="llmCommandInput" style="display: none">
                 <input type="checkbox" id="commandYes" name="commandDoselect" />
                 <label class="checkbox-label" for="commandYes">
-                  Allow the LLM to make the robot perform animations and other actions during the response.
+                  <strong>2.</strong> Allow the LLM to make the robot perform animations and other actions during the response.
                   <small><br />(Cho phép LLM điều khiển animation/hành động khi trả lời.)</small>
                 </label>
               </span>
               <span id="saveChatInput" style="display: none">
                 <input type="checkbox" id="saveChatYes" name="saveChatselect" />
                 <label class="checkbox-label" for="saveChatYes">
-                  Enable conversations via "I have a question". This also allows previous chats to be used in the
-                  context of future responses. LLM actions (the box above this one) must be enabled for conversations to work.
-                  <small><br />(Hội thoại qua « I have a question »; cần bật LLM actions ở ô phía trên.)</small>
+                  <strong>3.</strong> Continuous AI conversation: use &quot;I have a question&quot; and reuse past messages as context for later replies. LLM actions (option 2 above) must be on.
+                  <small><br />(Chế độ hội thoại liên tục bằng trí tuệ nhân tạo; cần bật LLM actions ở ô 2 phía trên.)</small>
                 </label></br>
-                <a href="#" onclick="deleteSavedChats()">Delete Saved Chats <small>(Xóa hội thoại đã lưu)</small></a>
+                <span style="display:inline-block; margin-left: 1.5em; margin-top: 4px;"><a href="#" onclick="deleteSavedChats()">Delete Saved Chats <small>(Xóa hội thoại đã lưu — dùng cùng mục 3)</small></a></span>
               </span>
               <span id="xiaozhiDisableIntentInput" style="display: none">
                 <input type="checkbox" id="xiaozhiDisableIntent" name="xiaozhiDisableIntent" />
                 <label class="checkbox-label" for="xiaozhiDisableIntent">
-                  Disable local intent matching for Xiaozhi. When enabled, all voice commands will be sent directly to the LLM server without checking local intents first. This allows the LLM to handle all commands, including complex requests.
+                  <strong>4.</strong> Disable local intent matching for Xiaozhi. When enabled, all voice commands will be sent directly to the LLM server without checking local intents first. This allows the LLM to handle all commands, including complex requests.
                   <small><br />(Tắt khớp intent cục bộ: mọi lệnh gửi thẳng LLM.)</small>
                 </label>
               </span>
