@@ -326,8 +326,22 @@ func LoadMultilingualIntents() ([]JsonIntent, error) {
 		path = "./"
 	}
 
-	// List of all supported languages
-	languages := []string{"en-US", "vi-VN", "zh-CN", "es-ES", "fr-FR", "de-DE", "it-IT", "pt-BR", "pl-PL", "ru-RU", "tr-TR", "uk-UA", "ko-KR", "nt-NL"}
+	// Languages to merge for intent matching.
+	// Default to English + Vietnamese only (reduces false positives from other languages' short keyphrases).
+	// Override via env INTENT_LANGS="vi-VN,en-US" (comma-separated).
+	languages := []string{"en-US", "vi-VN"}
+	if env := strings.TrimSpace(os.Getenv("INTENT_LANGS")); env != "" {
+		var parsed []string
+		for _, part := range strings.Split(env, ",") {
+			lang := strings.TrimSpace(part)
+			if lang != "" {
+				parsed = append(parsed, lang)
+			}
+		}
+		if len(parsed) > 0 {
+			languages = parsed
+		}
+	}
 
 	// Blacklist of intents to skip (not needed for Xiaozhi/Vector)
 	blacklist := map[string]bool{
@@ -387,7 +401,7 @@ func LoadMultilingualIntents() ([]JsonIntent, error) {
 		return nil, fmt.Errorf("no intent files found")
 	}
 
-	logger.Println(fmt.Sprintf("✅ Loaded multilingual intents: %d intents, %d total keyphrases from %d languages", len(mergedIntents), totalKeyphrases, loadedLanguages))
+	logger.Println(fmt.Sprintf("✅ Loaded multilingual intents: %d intents, %d total keyphrases from %d languages (%s)", len(mergedIntents), totalKeyphrases, loadedLanguages, strings.Join(languages, ",")))
 	return mergedIntents, nil
 }
 

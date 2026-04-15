@@ -127,7 +127,7 @@
 	{	
 		"name": "intent_imperative_negative", 
 		"keyphrases" : ["no", "dont", "no thanks" ],
-		"requiresexact": true
+		"requiresexact": false
 	},
 	{	
 		"name": "intent_photo_take_extend", 
@@ -226,7 +226,7 @@
 	},
 	{	
 		"name": "intent_imperative_dance", 
-		"keyphrases" : ["dance", "dancing", "thence", "dance to the beat", "the beat", "boogie", "to the music" ],
+		"keyphrases" : ["dance", "dancing", "thence", "dance to the beat", "the beat", "boogie", "to the music","dance for me" ],
 		"requiresexact": false
 	},
 	{	
