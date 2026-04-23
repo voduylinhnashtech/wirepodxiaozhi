@@ -87,21 +87,6 @@ func TakePendingAutoUseEp() bool {
 	return true
 }
 
-// skipStartChipperAfterAutoUseEp: vì /api-chipper/use_ep (và lần đầu) gọi RestartServer → go StartChipper(),
-// tránh thêm lần nữa ở StartFromProgramInit.
-var skipStartChipperAfterAutoUseEp bool
-
-func SetSkipStartChipperAfterAutoUseEp(v bool) { skipStartChipperAfterAutoUseEp = v }
-
-// TakeSkipStartChipperAfterAutoUseEp: true nếu đã bật chipper từ Restart; đừng gọi StartChipper thêm lần.
-func TakeSkipStartChipperAfterAutoUseEp() bool {
-	if !skipStartChipperAfterAutoUseEp {
-		return false
-	}
-	skipStartChipperAfterAutoUseEp = false
-	return true
-}
-
 func CreateConfigFromEnv() {
 	// if no config exists, create it
 	if os.Getenv("WEATHERAPI_ENABLED") == "true" {
