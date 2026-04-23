@@ -45,12 +45,8 @@ func ChipperHTTPApi(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, "done")
 		return
 	case r.URL.Path == "/api-chipper/use_ep":
-		vars.APIConfig.Server.EPConfig = true
-		vars.APIConfig.Server.Port = "443"
-		vars.APIConfig.PastInitialSetup = true
-		vars.ApplyDefaultsAfterInitialConnection()
-		botsetup.CreateServerConfig()
-		vars.WriteConfigToDisk()
+		// Giống hệt bấm Gửi trên initial.html (EP) — cả bước RestartServer
+		applyUseEpToDiskLikeSubmit()
 		RestartServer()
 		fmt.Fprint(w, "done")
 		return

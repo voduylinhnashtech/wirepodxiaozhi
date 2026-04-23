@@ -49,14 +49,42 @@ function checkInited() {
     }
   });
 
+  const overlay = document.getElementById("initial-setup-overlay");
+  const runOverlay = (on) => {
+    if (!overlay) return;
+    if (on) {
+      overlay.style.display = "flex";
+      overlay.setAttribute("aria-hidden", "false");
+    } else {
+      overlay.style.display = "none";
+      overlay.setAttribute("aria-hidden", "true");
+    }
+  };
+
+  // Vào thẳng home: nếu server lần đầu thì cùng bước với initial Submit — GET /api-chipper/use_ep (apply + restart). Xong mới ẩn lớp.
   fetch("/api/get_config")
-    .then((response) => response.json())
+    .then((r) => r.json())
     .then((config) => {
-      if (!config.pastinitialsetup) {
-        window.location.href = "/initial.html";
+      if (config.pastinitialsetup) {
+        runOverlay(false);
+        return;
       }
+      runOverlay(true);
+      return fetch("/api-chipper/use_ep")
+        .then((r) => r.text())
+        .then((t) => {
+          if (t && !t.toLowerCase().includes("error")) {
+            runOverlay(false);
+            window.location.reload();
+            return;
+          }
+          runOverlay(false);
+          window.location.href = "/initial.html";
+        });
     })
-    .catch(() => {});
+    .catch(() => {
+      runOverlay(false);
+    });
 }
 
 function createIntentSelect(element) {

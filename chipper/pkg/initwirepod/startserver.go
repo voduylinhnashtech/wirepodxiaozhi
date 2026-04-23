@@ -86,7 +86,11 @@ func BeginWirepodSpecific(sttInitFunc func() error, sttHandlerFunc interface{}, 
 
 	// begin wirepod stuff
 	vars.Init()
-	botsetup.CreateServerConfig()
+	if vars.TakePendingAutoUseEp() {
+		RunAutoUseEpFirstBootLikeInitialSubmit()
+	} else {
+		botsetup.CreateServerConfig()
+	}
 	var err error
 	voiceProcessor, err = wp.New(sttInitFunc, sttHandlerFunc, voiceProcessorName)
 	wpweb.SttInitFunc = sttInitFunc
@@ -112,6 +116,8 @@ func StartFromProgramInit(sttInitFunc func() error, sttHandlerFunc interface{}, 
 		logger.Println("\033[33m\033[1mLanguage value is blank, but STT service is " + vars.APIConfig.STT.Service + ". Reinitiating setup process.\033[0m")
 		logger.Println("\033[33m\033[1mWire-pod is not setup. Use the webserver at port 8080 to set up wire-pod.\033[0m")
 		vars.APIConfig.PastInitialSetup = false
+	} else if vars.TakeSkipStartChipperAfterAutoUseEp() {
+		// Đã StartChipper từ Restart() trong RunAutoUseEpFirstBootLikeInitialSubmit (cùng Submit)
 	} else {
 		go StartChipper()
 	}

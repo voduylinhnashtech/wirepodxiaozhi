@@ -23,6 +23,10 @@ const WeatherProviderNone = "none"
 
 var APIConfig apiConfig
 
+// pendingAutoUseEp: ReadConfig set true khi cần chạy cùng bước với /api-chipper/use_ep
+// (Configure + CreateServerConfig + Write) ngay sau Init, trong BeginWirepodSpecific.
+var pendingAutoUseEp bool
+
 type apiConfig struct {
 	Weather struct {
 		Enable   bool   `json:"enable"`
@@ -71,6 +75,33 @@ func WriteConfigToDisk() {
 	os.WriteFile(ApiConfigPath, writeBytes, 0644)
 }
 
+// SetPendingAutoUseEp marks that lần đầu cần gọi cùng luồng với Submit /api-chipper/use_ep trong BeginWirepod.
+func SetPendingAutoUseEp(v bool) { pendingAutoUseEp = v }
+
+// TakePendingAutoUseEp trả về true một lần nếu cần tự chọn Escape Pod như sau Submit.
+func TakePendingAutoUseEp() bool {
+	if !pendingAutoUseEp {
+		return false
+	}
+	pendingAutoUseEp = false
+	return true
+}
+
+// skipStartChipperAfterAutoUseEp: vì /api-chipper/use_ep (và lần đầu) gọi RestartServer → go StartChipper(),
+// tránh thêm lần nữa ở StartFromProgramInit.
+var skipStartChipperAfterAutoUseEp bool
+
+func SetSkipStartChipperAfterAutoUseEp(v bool) { skipStartChipperAfterAutoUseEp = v }
+
+// TakeSkipStartChipperAfterAutoUseEp: true nếu đã bật chipper từ Restart; đừng gọi StartChipper thêm lần.
+func TakeSkipStartChipperAfterAutoUseEp() bool {
+	if !skipStartChipperAfterAutoUseEp {
+		return false
+	}
+	skipStartChipperAfterAutoUseEp = false
+	return true
+}
+
 func CreateConfigFromEnv() {
 	// if no config exists, create it
 	if os.Getenv("WEATHERAPI_ENABLED") == "true" {
@@ -106,8 +137,18 @@ func WriteSTT() {
 	}
 }
 
+// ConfigureEscapePodWirePod sets in-memory + ApplyDefaults (Escape Pod, 443, past initial).
+// Được gọi từ applyUseEpToDiskLikeSubmit cùng với Submit /api-chipper/use_ep.
+func ConfigureEscapePodWirePod() {
+	APIConfig.Server.EPConfig = true
+	APIConfig.Server.Port = "443"
+	APIConfig.PastInitialSetup = true
+	ApplyDefaultsAfterInitialConnection()
+	logger.Println("✅ Escape Pod mode + initial setup applied (one-time; persisted in apiConfig.json).")
+}
+
 // ApplyDefaultsAfterInitialConnection sets Xiaozhi STT + knowledge defaults after the user finishes
-// initial.html (use_ep or use_ip). Server fields are already set by ChipperHTTPApi.
+// initial.html (use_ep or use_ip), or after ConfigureEscapePodWirePod. Server fields are already set.
 func ApplyDefaultsAfterInitialConnection() {
 	if APIConfig.STT.Service == "" {
 		APIConfig.STT.Service = "xiaozhi"
@@ -149,6 +190,9 @@ func ReadConfig() {
 	if _, err := os.Stat(ApiConfigPath); err != nil {
 		CreateConfigFromEnv()
 		applyDefaultOpenWeatherMap()
+		if !APIConfig.PastInitialSetup {
+			SetPendingAutoUseEp(true)
+		}
 		writeBytes, _ := json.Marshal(APIConfig)
 		os.WriteFile(ApiConfigPath, writeBytes, 0644)
 		logger.Println("API config JSON created")
@@ -180,6 +224,10 @@ func ReadConfig() {
 				APIConfig.HasReadFromEnv = true
 				APIConfig.PastInitialSetup = true
 			}
+		}
+
+		if !APIConfig.PastInitialSetup {
+			SetPendingAutoUseEp(true)
 		}
 
 		if APIConfig.Knowledge.Model == "meta-llama/Llama-2-70b-chat-hf" {
