@@ -49,6 +49,14 @@ function checkInited() {
     }
   });
 
+  fetch("/api/get_config")
+    .then((response) => response.json())
+    .then((config) => {
+      if (!config.pastinitialsetup) {
+        window.location.href = "/initial.html";
+      }
+    })
+    .catch(() => {});
 }
 
 function createIntentSelect(element) {

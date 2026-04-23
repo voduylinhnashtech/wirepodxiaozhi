@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <title>Wire-Pod · Cài đặt ban đầu</title>
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="theme-color" content="#1e1e1e">
+  <link rel="stylesheet" type="text/css" href="css/style.css" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <script src="https://kit.fontawesome.com/7508f396ac.js" crossorigin="anonymous"></script>
+  <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="Thu, 01 Jan 1970 00:00:00 GMT">
+</head>
+
+<body>
+  <div id="outer">
+    <div id="content" class="">
+      <h1>Wire-Pod — thiết lập lần đầu</h1>
+      <hr />
+      <div id="setup-status"></div>
+      <div id="config-options" style="display: block">
+        <p>
+          Chọn cách kết nối với Vector (Xiaozhi STT), rồi bấm <strong>Submit / Gửi cài đặt</strong>.
+          File <code>server_config</code> trên máy chủ sẽ được tạo khi bạn gửi (giống bản gốc wire-pod).
+        </p>
+        <hr />
+        <div id="section-conn" style="display: block">
+          <h3>Phương thức kết nối</h3>
+          <hr class="small-hr">
+          <div class="center" id="connStatus"></div>
+          <select onchange="checkConn()" name="connSelection" id="connSelection">
+            <option value="ep">
+              Escape Pod (khuyên dùng cho robot thường / production)
+            </option>
+            <option value="ip">
+              IP trực tiếp (OSKR / dev)
+            </option>
+          </select>
+          <div class="center" id="portViz" style="display: none">
+            <label for="portInput">Cổng tùy chọn (mặc định 443)</label>
+            <input type="text" id="portInput" name="portInput" placeholder="443" />
+          </div>
+          <hr />
+        </div>
+
+        <div id="section-language" style="display: none">
+          <h3>Ngôn ngữ STT (Vosk / whisper.cpp)</h3>
+          <hr class="small-hr">
+          <div class="center" id="languageStatus"></div>
+          <div id="languageSelectionDiv">
+            <select name="languageSelection" id="languageSelection">
+              <option value="en-US">English (US)</option>
+              <option value="it-IT">Italian (IT)</option>
+              <option value="es-ES">Spanish (ES)</option>
+              <option value="fr-FR">French (FR)</option>
+              <option value="de-DE">German (DE)</option>
+              <option value="pt-BR">Portuguese (BR)</option>
+              <option value="pl-PL">Polish (PL)</option>
+              <option value="tr-TR">Turkish (TR)</option>
+              <option value="ko-KR">Korean (KR)</option>
+              <option value="zh-CN">Chinese (CN)</option>
+              <option value="ru-RU">Russian (RU)</option>
+              <option value="nt-NL">Dutch (NL)</option>
+              <option value="uk-UA">Ukrainian (UA)</option>
+              <option value="vi-VN">VietNamese (VN)</option>
+            </select>
+          </div>
+          <hr />
+        </div>
+
+        <small class="desc">Thời tiết và Knowledge Graph có thể chỉnh trong trang Server Settings sau khi xong.</small>
+        <hr />
+
+        <button onclick="sendSetupInfo()">
+          Gửi cài đặt
+        </button>
+      </div>
+    </div>
+  </div>
+</body>
+<script src="./js/ui.js"></script>
+<script src="./js/main.js"></script>
+<script src="./js/initial.js"></script>
+<script>
+  checkLanguage();
+</script>
+
+</html>

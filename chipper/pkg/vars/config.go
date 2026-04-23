@@ -106,21 +106,25 @@ func WriteSTT() {
 	}
 }
 
-// applyWirepodProductionDefaults matches the old initial.html flow (Escape Pod + Submit):
-// Escape Pod (epconfig), port 443, Xiaozhi STT; initwirepod writes server_config.json after vars.Init.
-func applyWirepodProductionDefaults() {
-	logger.Println("🔧 Applying default production settings (Xiaozhi STT + Escape Pod + Knowledge Graph = Xiaozhi)")
-	APIConfig.Server.EPConfig = true
-	APIConfig.Server.Port = "443"
-	APIConfig.STT.Service = "xiaozhi"
-	APIConfig.STT.Language = "vi-VN"
-	APIConfig.STT.IntentMatchingMode = "multilingual"
-	APIConfig.Knowledge.Enable = true
-	APIConfig.Knowledge.Provider = "xiaozhi"
-	APIConfig.PastInitialSetup = true
+// ApplyDefaultsAfterInitialConnection sets Xiaozhi STT + knowledge defaults after the user finishes
+// initial.html (use_ep or use_ip). Server fields are already set by ChipperHTTPApi.
+func ApplyDefaultsAfterInitialConnection() {
+	if APIConfig.STT.Service == "" {
+		APIConfig.STT.Service = "xiaozhi"
+	}
+	if APIConfig.STT.Service == "xiaozhi" {
+		if APIConfig.STT.Language == "" {
+			APIConfig.STT.Language = "vi-VN"
+		}
+		if APIConfig.STT.IntentMatchingMode == "" {
+			APIConfig.STT.IntentMatchingMode = "multilingual"
+		}
+		APIConfig.Knowledge.Enable = true
+		if APIConfig.Knowledge.Provider == "" {
+			APIConfig.Knowledge.Provider = "xiaozhi"
+		}
+	}
 	APIConfig.HasReadFromEnv = true
-	logger.Println("✅ Defaults applied: EPConfig=true, Port=443, STT=xiaozhi, KG provider=xiaozhi")
-	applyDefaultOpenWeatherMap()
 }
 
 // applyDefaultOpenWeatherMap sets bundled OpenWeatherMap defaults when weather was never configured.
@@ -145,9 +149,6 @@ func ReadConfig() {
 	if _, err := os.Stat(ApiConfigPath); err != nil {
 		CreateConfigFromEnv()
 		applyDefaultOpenWeatherMap()
-		if !APIConfig.PastInitialSetup {
-			applyWirepodProductionDefaults()
-		}
 		writeBytes, _ := json.Marshal(APIConfig)
 		os.WriteFile(ApiConfigPath, writeBytes, 0644)
 		logger.Println("API config JSON created")
@@ -184,12 +185,6 @@ func ReadConfig() {
 		if APIConfig.Knowledge.Model == "meta-llama/Llama-2-70b-chat-hf" {
 			logger.Println("Setting Together model to Llama3")
 			APIConfig.Knowledge.Model = "meta-llama/Llama-3-70b-chat-hf"
-		}
-
-		// First-time installs: same as former initial.html + use_ep (no wizard page).
-		if !APIConfig.PastInitialSetup {
-			applyWirepodProductionDefaults()
-			logger.Println("ℹ️  Skipping initial.html — defaults saved; open main UI to adjust if needed")
 		}
 
 		applyDefaultOpenWeatherMap()

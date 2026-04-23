@@ -32,13 +32,14 @@ func ChipperHTTPApi(w http.ResponseWriter, r *http.Request) {
 		vars.APIConfig.Server.EPConfig = false
 		vars.APIConfig.Server.Port = port
 		err = botsetup.CreateCertCombo()
-		botsetup.CreateServerConfig()
 		if err != nil {
 			logger.Println(err)
 			fmt.Fprint(w, "error: "+err.Error())
 			return
 		}
 		vars.APIConfig.PastInitialSetup = true
+		vars.ApplyDefaultsAfterInitialConnection()
+		botsetup.CreateServerConfig()
 		vars.WriteConfigToDisk()
 		RestartServer()
 		fmt.Fprint(w, "done")
@@ -47,6 +48,7 @@ func ChipperHTTPApi(w http.ResponseWriter, r *http.Request) {
 		vars.APIConfig.Server.EPConfig = true
 		vars.APIConfig.Server.Port = "443"
 		vars.APIConfig.PastInitialSetup = true
+		vars.ApplyDefaultsAfterInitialConnection()
 		botsetup.CreateServerConfig()
 		vars.WriteConfigToDisk()
 		RestartServer()
