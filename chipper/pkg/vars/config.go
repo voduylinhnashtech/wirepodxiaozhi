@@ -50,6 +50,8 @@ type apiConfig struct {
 		Endpoint               string  `json:"endpoint"`
 		DeviceID               string  `json:"device_id"`               // MAC address cho xiaozhi
 		ClientID               string  `json:"client_id"`               // Client ID (UUID) cho xiaozhi
+		XiaozhiToken           string  `json:"xiaozhi_token,omitempty"` // token from OTA websocket section (ESP32)
+		XiaozhiProtocolVersion int     `json:"xiaozhi_protocol_version,omitempty"`
 		XiaozhiTTSVolume       string  `json:"xiaozhi_tts_volume"`      // normal|medium|high (maps to 1x|2x|4x)
 		XiaozhiDisableIntent   bool    `json:"xiaozhi_disable_intent"`  // Disable local intent matching for Xiaozhi
 		TopP                   float32 `json:"top_p"`
@@ -123,7 +125,7 @@ func WriteSTT() {
 }
 
 // ConfigureEscapePodWirePod sets in-memory + ApplyDefaults (Escape Pod, 443, past initial).
-// Được gọi từ applyUseEpToDiskLikeSubmit cùng với Submit /api-chipper/use_ep.
+// Prefer /api-chipper/use_ep (initwirepod/web.go) for the same disk flow as initial.html Submit.
 func ConfigureEscapePodWirePod() {
 	APIConfig.Server.EPConfig = true
 	APIConfig.Server.Port = "443"
@@ -204,7 +206,7 @@ func ReadConfig() {
 		if APIConfig.STT.Service != os.Getenv("STT_SERVICE") {
 			WriteSTT()
 		}
-		if !APIConfig.HasReadFromEnv {
+		if !APIConfig.HasReadFromEnv && os.Getenv("DDL_RPC_PORT") != "" {
 			if APIConfig.Server.Port != os.Getenv("DDL_RPC_PORT") {
 				APIConfig.HasReadFromEnv = true
 				APIConfig.PastInitialSetup = true

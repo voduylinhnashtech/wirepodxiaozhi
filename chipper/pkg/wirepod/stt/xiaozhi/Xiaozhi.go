@@ -35,15 +35,14 @@ func startPreconnectLoop() {
 				return
 			}
 
+			_ = xiaozhi.EnsureOtaSyncOnce()
+
 			baseURL, _, _ := xiaozhi.GetKnowledgeGraphConfig()
 			if baseURL == "" {
 				baseURL = "wss://api.tenclass.net/xiaozhi/v1/"
 			}
 
-			headers := http.Header{}
-			headers.Add("Protocol-Version", "1")
-			headers.Add("Device-Id", deviceID)
-			headers.Add("Client-Id", clientID)
+			headers := xiaozhi.BuildWebsocketHTTPHeaders(deviceID, clientID)
 
 			backoff := 1 * time.Second
 			for {
@@ -68,23 +67,7 @@ func startPreconnectLoop() {
 					continue
 				}
 
-				// Hello handshake (no listen start yet; we just keep the session alive)
-				helloEvent := map[string]interface{}{
-					"type":      "hello",
-					"version":   1,
-					"transport": "websocket",
-					"features": map[string]interface{}{
-						"mcp": true,
-						"aec": true,
-					},
-					"language": "vi",
-					"audio_params": map[string]interface{}{
-						"format":         "opus",
-						"sample_rate":    16000,
-						"channels":       1,
-						"frame_duration": 60,
-					},
-				}
+				helloEvent := xiaozhi.BuildHelloEvent()
 				if err := conn.WriteJSON(helloEvent); err != nil {
 					logger.Println(fmt.Sprintf("Xiaozhi STT: ⚠️  Preconnect hello write failed: %v", err))
 					conn.Close()
@@ -336,6 +319,8 @@ func STT(sreq sr.SpeechRequest) (string, error) {
 
 	safeLog("(Bot %s, Xiaozhi) Processing...", sreq.Device)
 
+	_ = xiaozhi.EnsureOtaSyncOnce()
+
 	// Get xiaozhi config
 	baseURL, _, _ := xiaozhi.GetKnowledgeGraphConfig()
 	if baseURL == "" {
@@ -353,29 +338,15 @@ func STT(sreq sr.SpeechRequest) (string, error) {
 	// ESP32 luôn gửi Client-Id, không optional
 	clientID := xiaozhi.GetClientIDFromConfig()
 
-	headers := http.Header{}
-
-	// Gửi các headers giống ESP32 (theo xiaozhi-esp32-main/main/protocols/websocket_protocol.cc)
-	// Protocol-Version: version của protocol (mặc định 1)
-	headers.Add("Protocol-Version", "1")
-
-	if deviceID != "" {
-		headers.Add("Device-Id", deviceID)
-		logger.Println(fmt.Sprintf("Xiaozhi STT: Using Device-Id from config: %s", deviceID))
-	} else {
+	if deviceID == "" {
 		logger.Println("Xiaozhi STT: WARNING - No Device-Id configured. Server may reject the connection.")
 	}
 	if clientID == "" {
-		// Nếu chưa có Client-Id, generate mới (GetClientIDFromConfig() sẽ tự động generate nếu Knowledge.Provider == "xiaozhi")
-		// Nhưng nếu Knowledge.Provider != "xiaozhi", cần generate thủ công
 		clientID = xiaozhi.GenerateClientID()
 		logger.Println(fmt.Sprintf("Xiaozhi STT: Generated new Client-Id: %s", clientID))
 	}
-	headers.Add("Client-Id", clientID)
-	logger.Println(fmt.Sprintf("Xiaozhi STT: Using Client-Id: %s (giống ESP32 - bắt buộc)", clientID))
-
-	// Authorization: chỉ gửi nếu có token (hiện tại chưa có token trong config)
-	// Nếu device đã activate, server có thể yêu cầu token trong header
+	headers := xiaozhi.BuildWebsocketHTTPHeaders(deviceID, clientID)
+	logger.Println(fmt.Sprintf("Xiaozhi STT: Using Device-Id=%s Client-Id=%s", deviceID, clientID))
 
 	// Bước 0: Kiểm tra xem có connection cũ có thể reuse không
 	// REUSE FIRST (go-xiaozhi-main style): if websocket is still alive, always reuse it for STT.
@@ -466,23 +437,7 @@ func STT(sreq sr.SpeechRequest) (string, error) {
 		// We must send the ACTUAL sample rate of the audio in hello event (16kHz)
 		// Server will create Opus decoder with this sample rate and then resample PCM to 24kHz internally
 		// If we send 24kHz but audio is 16kHz, Opus decoder will fail!
-		helloEvent := map[string]interface{}{
-			"type":      "hello",
-			"version":   1,
-			"transport": "websocket", // ESP32/Python luôn gửi transport: "websocket"
-			"features": map[string]interface{}{
-				"mcp": true,
-				"aec": true,
-			},
-			"language": "vi", // Vietnamese language (theo Python client)
-			"audio_params": map[string]interface{}{
-				"format":         "opus",
-				"sample_rate":    16000, // Vector robot sends Opus at 16kHz - MUST match actual audio!
-				"channels":       1,
-				"frame_duration": 60, // Python client dùng 60ms, không phải 20ms
-			},
-		}
-		// Log chi tiết hello event (giống botkct.py để debug)
+		helloEvent := xiaozhi.BuildHelloEvent()
 		helloEventJSON, _ := json.Marshal(helloEvent)
 		logger.Println(fmt.Sprintf("Xiaozhi STT: Sending hello event to %s with Device-Id: %s, Client-Id: %s", baseURL, deviceID, clientID))
 		logger.Println(fmt.Sprintf("Xiaozhi STT: Hello event JSON: %s", string(helloEventJSON)))
@@ -564,19 +519,7 @@ func STT(sreq sr.SpeechRequest) (string, error) {
 		}
 		logger.Println("Xiaozhi STT: ✅ New WebSocket connection created after reused connection became invalid")
 		// Send hello event for new connection
-		helloEvent := map[string]interface{}{
-			"type":      "hello",
-			"version":   1,
-			"transport": "websocket",
-			"features": map[string]interface{}{
-				"audio": map[string]interface{}{
-					"codecs":      []string{"opus"},
-					"sample_rate": 16000,
-					"channels":    1,
-				},
-			},
-			"language": "vi",
-		}
+		helloEvent := xiaozhi.BuildHelloEvent()
 		if err2 := conn.WriteJSON(helloEvent); err2 != nil {
 			logger.Println(fmt.Sprintf("Xiaozhi STT: ERROR - Failed to send hello event on new connection: %v", err2))
 			conn.Close()
@@ -628,22 +571,7 @@ func STT(sreq sr.SpeechRequest) (string, error) {
 			}
 			logger.Println("Xiaozhi STT: ✅ New WebSocket connection created after reused connection failed")
 			// Send hello event for new connection
-			helloEvent := map[string]interface{}{
-				"type":      "hello",
-				"version":   1,
-				"transport": "websocket",
-				"features": map[string]interface{}{
-					"mcp": true,
-					"aec": true,
-				},
-				"language": "vi",
-				"audio_params": map[string]interface{}{
-					"format":         "opus",
-					"sample_rate":    16000,
-					"channels":       1,
-					"frame_duration": 60,
-				},
-			}
+			helloEvent := xiaozhi.BuildHelloEvent()
 			if err2 := conn.WriteJSON(helloEvent); err2 != nil {
 				logger.Println(fmt.Sprintf("Xiaozhi STT: ERROR - Failed to send hello: %v", err2))
 				return "", fmt.Errorf("failed to send hello: %w", err2)
@@ -823,22 +751,7 @@ func STT(sreq sr.SpeechRequest) (string, error) {
 			}
 
 			// Hello handshake (same as initial connect)
-			helloEvent := map[string]interface{}{
-				"type":      "hello",
-				"version":   1,
-				"transport": "websocket",
-				"features": map[string]interface{}{
-					"mcp": true,
-					"aec": true,
-				},
-				"language": "vi",
-				"audio_params": map[string]interface{}{
-					"format":         "opus",
-					"sample_rate":    16000,
-					"channels":       1,
-					"frame_duration": 60,
-				},
-			}
+			helloEvent := xiaozhi.BuildHelloEvent()
 			if err := newConn.WriteJSON(helloEvent); err != nil {
 				newConn.Close()
 				return fmt.Errorf("reconnect hello write failed: %w", err)

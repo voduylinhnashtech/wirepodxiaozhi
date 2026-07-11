@@ -16,6 +16,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/kercre123/wire-pod/chipper/pkg/vars"
 )
 
 type PairingCode struct {
@@ -600,26 +602,19 @@ func CheckDeviceActivationFromServer(deviceID string, clientID ...string) (bool,
 	var lastErr error
 	for _, checkURL := range checkURLs {
 		// Log endpoint đang thử
-		fmt.Printf("[DEBUG] CheckDeviceActivationFromServer: Trying endpoint: %s (GET method, giống botkct.py)\n", checkURL)
+		fmt.Printf("[DEBUG] CheckDeviceActivationFromServer: Trying endpoint: %s (POST system info, ESP32-style)\n", checkURL)
 
-		// botkct.py chỉ dùng GET request
-		req, err := http.NewRequest("GET", checkURL, nil)
+		reqBody := BuildSystemInfoJSON(deviceID, clientIDValue)
+		req, err := http.NewRequest("POST", checkURL, bytes.NewReader(reqBody))
 		if err != nil {
-			fmt.Printf("[DEBUG] CheckDeviceActivationFromServer: Failed to create GET request for %s: %v\n", checkURL, err)
+			fmt.Printf("[DEBUG] CheckDeviceActivationFromServer: Failed to create POST request for %s: %v\n", checkURL, err)
 			lastErr = err
 			continue
 		}
 
-		// Headers giống botkct.py
-		req.Header.Set("Device-Id", deviceID)
-		if clientIDValue != "" {
-			req.Header.Set("Client-Id", clientIDValue)
-		}
-		req.Header.Set("Accept-Language", "vi")            // botkct.py: "Accept-Language": "vi"
-		req.Header.Set("User-Agent", "wirepodxiaozhi/1.0") // botkct.py: "User-Agent": "Xiaozhi-Python-Client/1.0.0"
+		req.Header = BuildOTAHTTPHeaders(deviceID, clientIDValue)
 
-		// Log headers đang gửi
-		fmt.Printf("[DEBUG] CheckDeviceActivationFromServer: GET %s - Request headers: Device-Id=%s, Client-Id=%s, Accept-Language=%s, User-Agent=%s\n",
+		fmt.Printf("[DEBUG] CheckDeviceActivationFromServer: POST %s - Request headers: Device-Id=%s, Client-Id=%s, Accept-Language=%s, User-Agent=%s\n",
 			checkURL, req.Header.Get("Device-Id"), req.Header.Get("Client-Id"),
 			req.Header.Get("Accept-Language"), req.Header.Get("User-Agent"))
 
@@ -749,27 +744,21 @@ func FetchUpstreamActivationFromOTACheck(deviceID, clientID, activationVersion, 
 
 	var lastErr error
 	for _, checkURL := range checkURLs {
-		// Upstream returns activation only on POST in practice (ESP32 POSTs system info when available).
-		req, err := http.NewRequest("POST", checkURL, bytes.NewReader([]byte("{}")))
+		body := BuildSystemInfoJSON(deviceID, clientID)
+		req, err := http.NewRequest("POST", checkURL, bytes.NewReader(body))
 		if err != nil {
 			lastErr = err
 			continue
 		}
 
-		req.Header.Set("Device-Id", deviceID)
-		if clientID != "" {
-			req.Header.Set("Client-Id", clientID)
+		req.Header = BuildOTAHTTPHeaders(deviceID, clientID)
+		if activationVersion != "" {
+			req.Header.Set("Activation-Version", activationVersion)
 		}
-		req.Header.Set("Accept-Language", "vi-VN")
-		req.Header.Set("User-Agent", "wirepodxiaozhi/1.0")
-		if activationVersion == "" {
-			activationVersion = "1"
-		}
-		req.Header.Set("Activation-Version", activationVersion)
 		if serialNumber != "" {
+			req.Header.Set("Activation-Version", "2")
 			req.Header.Set("Serial-Number", serialNumber)
 		}
-		req.Header.Set("Content-Type", "application/json")
 
 		client := &http.Client{Timeout: 30 * time.Second}
 		resp, err := client.Do(req)
@@ -805,6 +794,9 @@ func FetchUpstreamActivationFromOTACheck(deviceID, clientID, activationVersion, 
 			lastErr = fmt.Errorf("upstream 'activation' is not an object (%s)", checkURL)
 			continue
 		}
+
+		applyOtaResponse(result)
+		vars.WriteConfigToDisk()
 
 		act := &UpstreamActivation{Raw: result}
 		if v, ok := actObj["code"].(string); ok {
